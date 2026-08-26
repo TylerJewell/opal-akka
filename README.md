@@ -51,9 +51,9 @@ Full method, and the numbers that did not make this list: [`bench/REPORT.md`](be
 
 ## What it took to build
 
-⏱️ **168.3 hours** from the first command to the published repository, **11.0** of them active<br>
-💬 **3,278** exchanges with the model<br>
-✍️ **3,186,891** tokens written by the model, **1,382,039,377** counting everything sent and re-sent<br>
+⏱️ **168.5 hours** from the first command to the published repository, **11.1** of them active<br>
+💬 **3,337** exchanges with the model<br>
+✍️ **3,216,148** tokens written by the model, **1,430,857,283** counting everything sent and re-sent<br>
 🙋 **0** questions to a human<br>
 🧪 **315** tests
 
