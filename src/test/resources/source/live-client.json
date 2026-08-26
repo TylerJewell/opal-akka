@@ -1,0 +1,221 @@
+{
+ "backup_exists": false,
+ "callbacks_delete": 204,
+ "callbacks_delete_missing": 404,
+ "callbacks_get": 200,
+ "callbacks_get_missing": {
+  "body": {
+   "detail": "no callback found with this key"
+  },
+  "status": 404
+ },
+ "callbacks_list": {
+  "body": [
+   {
+    "config": {
+     "data": null,
+     "fetcher": null,
+     "headers": {
+      "content-type": "application/json"
+     },
+     "is_json": true,
+     "method": "post",
+     "process_data": false
+    },
+    "key": "b9953f3fc08754f28997306e7540cc399e11e52bedf1e77fbfdbb567f4deb334",
+    "url": "http://127.0.0.1:7095/data/callback_report"
+   }
+  ],
+  "status": 200
+ },
+ "callbacks_register": {
+  "body": {
+   "config": {
+    "data": null,
+    "fetcher": null,
+    "headers": null,
+    "is_json": true,
+    "method": "post",
+    "process_data": true
+   },
+   "key": "2869bc6547b31204350e8261d26230599532cace24f8a57bf1181c136b11f66d",
+   "url": "http://127.0.0.1:9/cb"
+  },
+  "status": 200
+ },
+ "client_docs_status": 200,
+ "client_openapi_paths": [
+  "/callbacks",
+  "/callbacks/{key}",
+  "/data-updater/trigger",
+  "/opal-server/connectivity",
+  "/opal-server/connectivity/disable",
+  "/opal-server/connectivity/enable",
+  "/policy-store/config",
+  "/policy-updater/trigger"
+ ],
+ "client_openapi_title": "OPAL Client",
+ "client_redoc_status": 200,
+ "connectivity_disable": {
+  "body": {
+   "status": "disabled"
+  },
+  "status": 200
+ },
+ "connectivity_disable_again": {
+  "body": {
+   "status": "already_disabled"
+  },
+  "status": 200
+ },
+ "connectivity_enable": {
+  "body": {
+   "status": "enabled"
+  },
+  "status": 200
+ },
+ "connectivity_enable_again": {
+  "body": {
+   "status": "already_enabled"
+  },
+  "status": 200
+ },
+ "connectivity_status": {
+  "body": {
+   "offline_mode_enabled": true,
+   "opal_server_connectivity_disabled": false
+  },
+  "status": 200
+ },
+ "connectivity_status_after_disable": {
+  "body": {
+   "offline_mode_enabled": true,
+   "opal_server_connectivity_disabled": true
+  },
+  "status": 200
+ },
+ "data_trigger": {
+  "body": {
+   "status": "ok"
+  },
+  "status": 200
+ },
+ "data_update_propagated": {
+  "result": {
+   "hello": "world"
+  }
+ },
+ "healthcheck": {
+  "body": {
+   "online": true,
+   "status": "ok"
+  },
+  "status": 200
+ },
+ "healthy": {
+  "body": {
+   "online": true,
+   "status": "ok"
+  },
+  "status": 200
+ },
+ "opa_data_root": {
+  "result": {
+   "base": {},
+   "envs": {
+    "prod": {
+     "x": 1
+    }
+   },
+   "rbac": {
+    "allow": true
+   },
+   "top": 1
+  }
+ },
+ "opa_policies": [
+  "envs/prod.rego",
+  "rbac.rego"
+ ],
+ "policy_change_propagated": {
+  "after": "package rbac\n\nallow = false\n",
+  "before": "package rbac\n\nallow = true\n",
+  "changed": true
+ },
+ "policy_store_config": {
+  "body": {
+   "auth_type": "none",
+   "type": "OPA",
+   "url": "http://127.0.0.1:8191"
+  },
+  "status": 200
+ },
+ "policy_trigger": {
+  "body": {
+   "status": "ok"
+  },
+  "status": 200
+ },
+ "ready": {
+  "body": {
+   "status": "ok"
+  },
+  "status": 200
+ },
+ "root": {
+  "body": {
+   "online": true,
+   "status": "ok"
+  },
+  "status": 200
+ },
+ "server_client_info": {
+  "host:127.0.0.1:46962": {
+   "client_id": "host:127.0.0.1:46962",
+   "connect_time": 1787746120.3726754,
+   "query_params": {},
+   "refcount": 1,
+   "source_host": "127.0.0.1",
+   "source_port": 46962,
+   "subscribed_topics": [
+    "policy:."
+   ]
+  },
+  "host:127.0.0.1:46968": {
+   "client_id": "host:127.0.0.1:46968",
+   "connect_time": 1787746120.373533,
+   "query_params": {},
+   "refcount": 1,
+   "source_host": "127.0.0.1",
+   "source_port": 46968,
+   "subscribed_topics": [
+    "policy_data"
+   ]
+  }
+ },
+ "server_statistics": {
+  "clients": {
+   "CLIENT_0774ffa8f4dc4e3cbc530c454e2fe1e0": [
+    {
+     "client_id": "CLIENT_0774ffa8f4dc4e3cbc530c454e2fe1e0",
+     "rpc_id": "6cee2f61f7174e0e9eb330dc83da298d",
+     "topics": [
+      "policy:."
+     ]
+    },
+    {
+     "client_id": "CLIENT_0774ffa8f4dc4e3cbc530c454e2fe1e0",
+     "rpc_id": "585be273fb7746a5ab6c09a720c41488",
+     "topics": [
+      "policy_data"
+     ]
+    }
+   ]
+  },
+  "servers": [
+   "2c921ccbedf842fe8fdde28fe22a42d0"
+  ],
+  "uptime": "2026-08-26T12:08:34.866980",
+  "version": "0.0.0"
+ }
+}

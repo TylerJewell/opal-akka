@@ -1,0 +1,444 @@
+{
+ "statsd": {
+  "namespace_opal": [
+   "permit.opal.startup:1|c\n",
+   "permit.opal.scope.clone:1|c|#outcome:ok,scope_id:s1\n",
+   "permit.opal.in_flight:-1|c\n",
+   "permit.opal.opal_server.scopes.count:3|g\n",
+   "permit.opal.with.tags:1.5|g|#a:b\n",
+   "_e{10,12}:title here|message body|#k:v\n",
+   "_e{7,4}:no tags|body\n"
+  ],
+  "namespace_dashed": [
+   "permit.opal_server.dashed:1|c\n"
+  ],
+  "namespace_from_dd_service": [
+   "permit.my_service.from_dd_service:1|c\n"
+  ],
+  "while_disabled_to_this_socket": [
+   "permit.my_service.while_disabled:1|c\n"
+  ]
+ },
+ "statsd_default": {
+  "default_host": "localhost",
+  "default_port": 8125,
+  "default_namespace": null,
+  "datagrams": [
+   "startup:1|c\n",
+   "g:2.0|g\n",
+   "gi:2|g\n",
+   "tagged:1|c|#b:2,a:1\n"
+  ]
+ },
+ "statsd_edges": [
+  "_e{13,10}:h\u00e9llo w\u00f6rld|tw\u00f6 lines|#k:v\n",
+  "_e{5,13}:multi|first\\nsecond\n",
+  "_e{10,4}:empty tags|body\n",
+  "permit.opal.empty_value_tag:1|c|#k:\n",
+  "permit.opal.neg:-1.25|g\n",
+  "permit.opal.many:1|c|#a:1,b:2,c:3\n"
+ ],
+ "engine_logs": {
+  "minimal": [
+   {
+    "line": "{\"level\":\"info\",\"msg\":\"Initializing server.\"}",
+    "logged": [
+     {
+      "level": "INFO",
+      "message": "Initializing server."
+     }
+    ]
+   },
+   {
+    "line": "{\"level\":\"info\",\"msg\":\"Received request.\",\"req_method\":\"GET\",\"req_path\":\"/health\",\"resp_status\":200}",
+    "logged": [
+     {
+      "level": "INFO",
+      "message": "Received request.   "
+     }
+    ]
+   },
+   {
+    "line": "{\"level\":\"debug\",\"msg\":\"Sent response.\",\"req_method\":\"POST\",\"req_path\":\"/v1/data/x\"}",
+    "logged": [
+     {
+      "level": "DEBUG",
+      "message": "Sent response.      "
+     }
+    ]
+   },
+   {
+    "line": "{\"level\":\"warning\",\"msg\":\"Partial.\",\"req_method\":\"GET\"}",
+    "logged": [
+     {
+      "level": "WARNING",
+      "message": "Partial.            "
+     }
+    ]
+   },
+   {
+    "line": "{\"level\":\"error\",\"addrs\":[\":8181\"],\"diagnostic-addrs\":[]}",
+    "logged": [
+     {
+      "level": "ERROR",
+      "message": "{\"addrs\": [\":8181\"], \"diagnostic-addrs\": []}"
+     }
+    ]
+   },
+   {
+    "line": "{\"level\":\"fatal\",\"msg\":\"bad\",\"err\":{\"code\":1,\"text\":\"oops\"}}",
+    "logged": [
+     {
+      "level": "CRITICAL",
+      "message": "bad                 "
+     }
+    ]
+   },
+   {
+    "line": "not json at all",
+    "logged": [
+     {
+      "level": "INFO",
+      "message": "b'not json at all'"
+     }
+    ]
+   },
+   {
+    "line": "{\"msg\":\"no level here\",\"extra\":true}",
+    "logged": [
+     {
+      "level": "INFO",
+      "message": "no level here       "
+     }
+    ]
+   },
+   {
+    "line": "{\"level\":\"warn\",\"msg\":\"warn spelling\"}",
+    "logged": [
+     {
+      "level": "WARNING",
+      "message": "warn spelling       "
+     }
+    ]
+   },
+   {
+    "line": "{\"level\":\"critical\",\"msg\":\"critical spelling\"}",
+    "logged": [
+     {
+      "level": "CRITICAL",
+      "message": "critical spelling   "
+     }
+    ]
+   },
+   {
+    "line": "{\"level\":\"info\",\"msg\":\"a message that is much longer than twenty characters\",\"k\":1}",
+    "logged": [
+     {
+      "level": "INFO",
+      "message": "a message that is much longer than twenty characters"
+     }
+    ]
+   }
+  ],
+  "http": [
+   {
+    "line": "{\"level\":\"info\",\"msg\":\"Initializing server.\"}",
+    "logged": [
+     {
+      "level": "INFO",
+      "message": "Initializing server. {}"
+     }
+    ]
+   },
+   {
+    "line": "{\"level\":\"info\",\"msg\":\"Received request.\",\"req_method\":\"GET\",\"req_path\":\"/health\",\"resp_status\":200}",
+    "logged": [
+     {
+      "level": "INFO",
+      "message": "Received request.    GET /health -> 200"
+     }
+    ]
+   },
+   {
+    "line": "{\"level\":\"debug\",\"msg\":\"Sent response.\",\"req_method\":\"POST\",\"req_path\":\"/v1/data/x\"}",
+    "logged": [
+     {
+      "level": "DEBUG",
+      "message": "Sent response.       POST /v1/data/x"
+     }
+    ]
+   },
+   {
+    "line": "{\"level\":\"warning\",\"msg\":\"Partial.\",\"req_method\":\"GET\"}",
+    "logged": [
+     {
+      "level": "WARNING",
+      "message": "Partial.             {}"
+     }
+    ]
+   },
+   {
+    "line": "{\"level\":\"error\",\"addrs\":[\":8181\"],\"diagnostic-addrs\":[]}",
+    "logged": [
+     {
+      "level": "ERROR",
+      "message": "{\"addrs\": [\":8181\"], \"diagnostic-addrs\": []}"
+     }
+    ]
+   },
+   {
+    "line": "{\"level\":\"fatal\",\"msg\":\"bad\",\"err\":{\"code\":1,\"text\":\"oops\"}}",
+    "logged": [
+     {
+      "level": "CRITICAL",
+      "message": "bad                  {\"err\": {\"code\": 1, \"text\": \"oops\"}}"
+     }
+    ]
+   },
+   {
+    "line": "not json at all",
+    "logged": [
+     {
+      "level": "INFO",
+      "message": "b'not json at all'"
+     }
+    ]
+   },
+   {
+    "line": "{\"msg\":\"no level here\",\"extra\":true}",
+    "logged": [
+     {
+      "level": "INFO",
+      "message": "no level here        {\"extra\": true}"
+     }
+    ]
+   },
+   {
+    "line": "{\"level\":\"warn\",\"msg\":\"warn spelling\"}",
+    "logged": [
+     {
+      "level": "WARNING",
+      "message": "warn spelling        {}"
+     }
+    ]
+   },
+   {
+    "line": "{\"level\":\"critical\",\"msg\":\"critical spelling\"}",
+    "logged": [
+     {
+      "level": "CRITICAL",
+      "message": "critical spelling    {}"
+     }
+    ]
+   },
+   {
+    "line": "{\"level\":\"info\",\"msg\":\"a message that is much longer than twenty characters\",\"k\":1}",
+    "logged": [
+     {
+      "level": "INFO",
+      "message": "a message that is much longer than twenty characters {\"k\": 1}"
+     }
+    ]
+   }
+  ],
+  "full": [
+   {
+    "line": "{\"level\":\"info\",\"msg\":\"Initializing server.\"}",
+    "logged": [
+     {
+      "level": "INFO",
+      "message": "Initializing server. {}"
+     }
+    ]
+   },
+   {
+    "line": "{\"level\":\"info\",\"msg\":\"Received request.\",\"req_method\":\"GET\",\"req_path\":\"/health\",\"resp_status\":200}",
+    "logged": [
+     {
+      "level": "INFO",
+      "message": "Received request.    {\"req_method\": \"GET\", \"req_path\": \"/health\", \"resp_status\": 200}"
+     }
+    ]
+   },
+   {
+    "line": "{\"level\":\"debug\",\"msg\":\"Sent response.\",\"req_method\":\"POST\",\"req_path\":\"/v1/data/x\"}",
+    "logged": [
+     {
+      "level": "DEBUG",
+      "message": "Sent response.       {\"req_method\": \"POST\", \"req_path\": \"/v1/data/x\"}"
+     }
+    ]
+   },
+   {
+    "line": "{\"level\":\"warning\",\"msg\":\"Partial.\",\"req_method\":\"GET\"}",
+    "logged": [
+     {
+      "level": "WARNING",
+      "message": "Partial.             {\"req_method\": \"GET\"}"
+     }
+    ]
+   },
+   {
+    "line": "{\"level\":\"error\",\"addrs\":[\":8181\"],\"diagnostic-addrs\":[]}",
+    "logged": [
+     {
+      "level": "ERROR",
+      "message": "{\"addrs\": [\":8181\"], \"diagnostic-addrs\": []}"
+     }
+    ]
+   },
+   {
+    "line": "{\"level\":\"fatal\",\"msg\":\"bad\",\"err\":{\"code\":1,\"text\":\"oops\"}}",
+    "logged": [
+     {
+      "level": "CRITICAL",
+      "message": "bad                  {\"err\": {\"code\": 1, \"text\": \"oops\"}}"
+     }
+    ]
+   },
+   {
+    "line": "not json at all",
+    "logged": [
+     {
+      "level": "INFO",
+      "message": "b'not json at all'"
+     }
+    ]
+   },
+   {
+    "line": "{\"msg\":\"no level here\",\"extra\":true}",
+    "logged": [
+     {
+      "level": "INFO",
+      "message": "no level here        {\"extra\": true}"
+     }
+    ]
+   },
+   {
+    "line": "{\"level\":\"warn\",\"msg\":\"warn spelling\"}",
+    "logged": [
+     {
+      "level": "WARNING",
+      "message": "warn spelling        {}"
+     }
+    ]
+   },
+   {
+    "line": "{\"level\":\"critical\",\"msg\":\"critical spelling\"}",
+    "logged": [
+     {
+      "level": "CRITICAL",
+      "message": "critical spelling    {}"
+     }
+    ]
+   },
+   {
+    "line": "{\"level\":\"info\",\"msg\":\"a message that is much longer than twenty characters\",\"k\":1}",
+    "logged": [
+     {
+      "level": "INFO",
+      "message": "a message that is much longer than twenty characters {\"k\": 1}"
+     }
+    ]
+   }
+  ],
+  "none": [
+   {
+    "line": "{\"level\":\"info\",\"msg\":\"Initializing server.\"}",
+    "logged": []
+   },
+   {
+    "line": "{\"level\":\"info\",\"msg\":\"Received request.\",\"req_method\":\"GET\",\"req_path\":\"/health\",\"resp_status\":200}",
+    "logged": []
+   },
+   {
+    "line": "{\"level\":\"debug\",\"msg\":\"Sent response.\",\"req_method\":\"POST\",\"req_path\":\"/v1/data/x\"}",
+    "logged": []
+   },
+   {
+    "line": "{\"level\":\"warning\",\"msg\":\"Partial.\",\"req_method\":\"GET\"}",
+    "logged": []
+   },
+   {
+    "line": "{\"level\":\"error\",\"addrs\":[\":8181\"],\"diagnostic-addrs\":[]}",
+    "logged": []
+   },
+   {
+    "line": "{\"level\":\"fatal\",\"msg\":\"bad\",\"err\":{\"code\":1,\"text\":\"oops\"}}",
+    "logged": []
+   },
+   {
+    "line": "not json at all",
+    "logged": []
+   },
+   {
+    "line": "{\"msg\":\"no level here\",\"extra\":true}",
+    "logged": []
+   },
+   {
+    "line": "{\"level\":\"warn\",\"msg\":\"warn spelling\"}",
+    "logged": []
+   },
+   {
+    "line": "{\"level\":\"critical\",\"msg\":\"critical spelling\"}",
+    "logged": []
+   },
+   {
+    "line": "{\"level\":\"info\",\"msg\":\"a message that is much longer than twenty characters\",\"k\":1}",
+    "logged": []
+   }
+  ]
+ },
+ "engine_backoff": {
+  "1": 0.5,
+  "2": 1.0,
+  "3": 2.0,
+  "4": 4.0,
+  "5": 8.0,
+  "6": 10.0,
+  "7": 10.0,
+  "8": 10.0,
+  "9": 10.0
+ },
+ "opa_requests": {
+  "patch_root": [
+   {
+    "method": "PATCH",
+    "path": "/v1/v1/data",
+    "body": "{\"items\": [{\"op\": \"add\", \"path\": \"/x\", \"value\": 1}]}"
+   }
+  ],
+  "patch_under_path": [
+   {
+    "method": "PATCH",
+    "path": "/v1/v1/data/some/where",
+    "body": "[{\"op\": \"add\", \"path\": \"/x\", \"value\": 1}]"
+   }
+  ],
+  "put_root_list": [
+   {
+    "method": "PUT",
+    "path": "/v1/v1/data",
+    "body": "{\"items\": [1, 2, 3]}"
+   }
+  ]
+ },
+ "fetcher_register": {
+  "FETCH_PROVIDER_MODULES": [
+   "opal_common.fetcher.providers"
+  ],
+  "registered": [
+   "FastApiRpcFetchProvider",
+   "HttpFetchProvider"
+  ]
+ },
+ "log_render": {
+  "defaults": "\u001b[32m2026-08-26T13:38:15.380829-0700\u001b[0m | \u001b[34mopal_server.server                      \u001b[0m|\u001b[1m INFO  | hello\u001b[0m\n\u001b[32m2026-08-26T13:38:15.381057-0700\u001b[0m | \u001b[34ma...forty                               \u001b[0m|\u001b[33m\u001b[1mWARNING | long name\u001b[0m\n\u001b[32m2026-08-26T13:38:15.381114-0700\u001b[0m | \u001b[34maverylongsinglemodulenamewithnodotsat...\u001b[0m|\u001b[31m\u001b[1mERROR  | no dots\u001b[0m\n\u001b[32m2026-08-26T13:38:15.381167-0700\u001b[0m | \u001b[34mopal_server.server                      \u001b[0m|\u001b[1m INFO  | https://***@example.com/x?token=abc\u001b[0m\n",
+  "with_pid": "\u001b[32m2026-08-26T13:38:15.729630-0700\u001b[0m | 10314 | \u001b[34mopal_server.server                      \u001b[0m|\u001b[1m INFO  | hello\u001b[0m\n\u001b[32m2026-08-26T13:38:15.729797-0700\u001b[0m | 10314 | \u001b[34ma...forty                               \u001b[0m|\u001b[33m\u001b[1mWARNING | long name\u001b[0m\n\u001b[32m2026-08-26T13:38:15.729871-0700\u001b[0m | 10314 | \u001b[34maverylongsinglemodulenamewithnodotsat...\u001b[0m|\u001b[31m\u001b[1mERROR  | no dots\u001b[0m\n\u001b[32m2026-08-26T13:38:15.729929-0700\u001b[0m | 10314 | \u001b[34mopal_server.server                      \u001b[0m|\u001b[1m INFO  | https://***@example.com/x?token=abc\u001b[0m\n",
+  "no_colorize": "2026-08-26T13:38:16.081229-0700 | opal_server.server                      | INFO  | hello\n2026-08-26T13:38:16.081408-0700 | a...forty                               |WARNING | long name\n2026-08-26T13:38:16.081437-0700 | averylongsinglemodulenamewithnodotsat...|ERROR  | no dots\n2026-08-26T13:38:16.081464-0700 | opal_server.server                      | INFO  | https://***@example.com/x?token=abc\n",
+  "level_debug": "\u001b[32m2026-08-26T13:38:16.436407-0700\u001b[0m | \u001b[34mopal_server.server                      \u001b[0m|\u001b[1m INFO  | hello\u001b[0m\n\u001b[32m2026-08-26T13:38:16.436567-0700\u001b[0m | \u001b[34mopal_server.server                      \u001b[0m|\u001b[34m\u001b[1mDEBUG  | a debug line\u001b[0m\n\u001b[32m2026-08-26T13:38:16.436711-0700\u001b[0m | \u001b[34ma...forty                               \u001b[0m|\u001b[33m\u001b[1mWARNING | long name\u001b[0m\n\u001b[32m2026-08-26T13:38:16.436768-0700\u001b[0m | \u001b[34maverylongsinglemodulenamewithnodotsat...\u001b[0m|\u001b[31m\u001b[1mERROR  | no dots\u001b[0m\n\u001b[32m2026-08-26T13:38:16.436820-0700\u001b[0m | \u001b[34mopal_server.server                      \u001b[0m|\u001b[1m INFO  | https://***@example.com/x?token=abc\u001b[0m\n",
+  "exclude_uvicorn": "\u001b[32m2026-08-26T13:38:16.796441-0700\u001b[0m | \u001b[34mopal_server.server                      \u001b[0m|\u001b[1m INFO  | hello\u001b[0m\n\u001b[32m2026-08-26T13:38:16.796623-0700\u001b[0m | \u001b[34ma...forty                               \u001b[0m|\u001b[33m\u001b[1mWARNING | long name\u001b[0m\n\u001b[32m2026-08-26T13:38:16.796680-0700\u001b[0m | \u001b[34maverylongsinglemodulenamewithnodotsat...\u001b[0m|\u001b[31m\u001b[1mERROR  | no dots\u001b[0m\n\u001b[32m2026-08-26T13:38:16.796732-0700\u001b[0m | \u001b[34mopal_server.server                      \u001b[0m|\u001b[1m INFO  | https://***@example.com/x?token=abc\u001b[0m\n",
+  "exclude_include": "\u001b[32m2026-08-26T13:38:17.144455-0700\u001b[0m | \u001b[34mopal_server.server                      \u001b[0m|\u001b[1m INFO  | hello\u001b[0m\n\u001b[32m2026-08-26T13:38:17.144590-0700\u001b[0m | \u001b[34muvicorn.access                          \u001b[0m|\u001b[1m INFO  | an access line\u001b[0m\n\u001b[32m2026-08-26T13:38:17.144644-0700\u001b[0m | \u001b[34ma...forty                               \u001b[0m|\u001b[33m\u001b[1mWARNING | long name\u001b[0m\n\u001b[32m2026-08-26T13:38:17.144696-0700\u001b[0m | \u001b[34maverylongsinglemodulenamewithnodotsat...\u001b[0m|\u001b[31m\u001b[1mERROR  | no dots\u001b[0m\n\u001b[32m2026-08-26T13:38:17.145740-0700\u001b[0m | \u001b[34mopal_server.server                      \u001b[0m|\u001b[1m INFO  | https://***@example.com/x?token=abc\u001b[0m\n",
+  "serialize": "{\"text\": \"\\u001b[32m2026-08-26T13:38:17.506424-0700\\u001b[0m | \\u001b[34mopal_server.server                      \\u001b[0m|\\u001b[1m INFO  | hello\\u001b[0m\\n\", \"record\": {\"elapsed\": {\"repr\": \"0:00:02.955059\", \"seconds\": 2.955059}, \"exception\": null, \"extra\": {}, \"file\": {\"name\": \"log_render.py\", \"path\": \"/mnt/c/Users/tyler/specify/opal-port/probes/complete/log_render.py\"}, \"function\": \"render\", \"level\": {\"icon\": \"\u2139\ufe0f\", \"name\": \"INFO\", \"no\": 20}, \"line\": 45, \"message\": \"hello\", \"module\": \"log_render\", \"name\": \"opal_server.server\", \"process\": {\"id\": 10314, \"name\": \"MainProcess\"}, \"thread\": {\"id\": 124284498378880, \"name\": \"MainThread\"}, \"time\": {\"repr\": \"2026-08-26 13:38:17.506424-07:00\", \"timestamp\": 1787776697.506424}}}\n{\"text\": \"\\u001b[32m2026-08-26T13:38:17.506667-0700\\u001b[0m | \\u001b[34ma...forty                               \\u001b[0m|\\u001b[33m\\u001b[1mWARNING | long name\\u001b[0m\\n\", \"record\": {\"elapsed\": {\"repr\": \"0:00:02.955302\", \"seconds\": 2.955302}, \"exception\": null, \"extra\": {}, \"file\": {\"name\": \"log_render.py\", \"path\": \"/mnt/c/Users/tyler/specify/opal-port/probes/complete/log_render.py\"}, \"function\": \"render\", \"level\": {\"icon\": \"\u26a0\ufe0f\", \"name\": \"WARNING\", \"no\": 30}, \"line\": 45, \"message\": \"long name\", \"module\": \"log_render\", \"name\": \"a...forty\", \"process\": {\"id\": 10314, \"name\": \"MainProcess\"}, \"thread\": {\"id\": 124284498378880, \"name\": \"MainThread\"}, \"time\": {\"repr\": \"2026-08-26 13:38:17.506667-07:00\", \"timestamp\": 1787776697.506667}}}\n{\"text\": \"\\u001b[32m2026-08-26T13:38:17.506762-0700\\u001b[0m | \\u001b[34maverylongsinglemodulenamewithnodotsat...\\u001b[0m|\\u001b[31m\\u001b[1mERROR  | no dots\\u001b[0m\\n\", \"record\": {\"elapsed\": {\"repr\": \"0:00:02.955397\", \"seconds\": 2.955397}, \"exception\": null, \"extra\": {}, \"file\": {\"name\": \"log_render.py\", \"path\": \"/mnt/c/Users/tyler/specify/opal-port/probes/complete/log_render.py\"}, \"function\": \"render\", \"level\": {\"icon\": \"\u274c\", \"name\": \"ERROR\", \"no\": 40}, \"line\": 45, \"message\": \"no dots\", \"module\": \"log_render\", \"name\": \"averylongsinglemodulenamewithnodotsat...\", \"process\": {\"id\": 10314, \"name\": \"MainProcess\"}, \"thread\": {\"id\": 124284498378880, \"name\": \"MainThread\"}, \"time\": {\"repr\": \"2026-08-26 13:38:17.506762-07:00\", \"timestamp\": 1787776697.506762}}}\n{\"text\": \"\\u001b[32m2026-08-26T13:38:17.506854-0700\\u001b[0m | \\u001b[34mopal_server.server                      \\u001b[0m|\\u001b[1m INFO  | https://***@example.com/x?token=abc\\u001b[0m\\n\", \"record\": {\"elapsed\": {\"repr\": \"0:00:02.955489\", \"seconds\": 2.955489}, \"exception\": null, \"extra\": {}, \"file\": {\"name\": \"log_render.py\", \"path\": \"/mnt/c/Users/tyler/specify/opal-port/probes/complete/log_render.py\"}, \"function\": \"render\", \"level\": {\"icon\": \"\u2139\ufe0f\", \"name\": \"INFO\", \"no\": 20}, \"line\": 45, \"message\": \"https://***@example.com/x?token=abc\", \"module\": \"log_render\", \"name\": \"opal_server.server\", \"process\": {\"id\": 10314, \"name\": \"MainProcess\"}, \"thread\": {\"id\": 124284498378880, \"name\": \"MainThread\"}, \"time\": {\"repr\": \"2026-08-26 13:38:17.506854-07:00\", \"timestamp\": 1787776697.506854}}}\n"
+ }
+}

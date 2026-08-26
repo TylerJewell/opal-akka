@@ -1,0 +1,191 @@
+{
+ "jwks": {
+  "body": {
+   "keys": [
+    {
+     "e": "AQAB",
+     "key_ops": [
+      "verify"
+     ],
+     "kty": "RSA",
+     "n": "y3TYZprnZ4NQ8rcpF5UE-qd7GrDG-DobJst6CbUzEamcAkUIyOltrmTZd80QFGl2ygdUhp_SnI2QJ-8xEHV6lJlD7k_NwllE9kuDykMiF1gLwui2CDwkfUUTz_UmqcxH7O2T47DkuYgjnjGBm6H-h8WVlWkvpv7bDRWuXBq2lXshy1OXttc6dkMegk9ai_6jUuQlWY-gaqrLc7dybXzOaVerggBlMInCe7ugDHGCCAS0kBRq-G2RpVw48PzWOVD3vapqOfE6ue79cDU6wiZBfXR42SRY-5qq9psR0qL7w_DVA7iF_pDP0GZa-UWZLN8ZZRrV9x7OcZsFxckFsVOw8Q"
+    }
+   ]
+  },
+  "status": 200
+ },
+ "policy_bad_token": {
+  "body": {
+   "detail": {
+    "error": "Could not decode access token",
+    "token": "not.a.jwt"
+   }
+  },
+  "status": 401,
+  "www": "Bearer"
+ },
+ "policy_base_hash_absent": 500,
+ "policy_base_hash_head": 200,
+ "policy_base_hash_malformed": 500,
+ "policy_no_token": {
+  "body": {
+   "detail": {
+    "error": "access token was not provided"
+   }
+  },
+  "status": 401,
+  "www": "Bearer"
+ },
+ "policy_with_client_token": {
+  "status": 200
+ },
+ "publish_as_client": {
+  "body": {
+   "detail": {
+    "error": "Incorrect 'peer_type' claim for OPAL jwt token: PeerType.client, expected: PeerType.datasource"
+   }
+  },
+  "status": 401,
+  "www": "Bearer"
+ },
+ "publish_as_datasource": {
+  "body": {
+   "status": "ok"
+  },
+  "status": 200
+ },
+ "publish_forbidden_topic": {
+  "body": {
+   "detail": {
+    "error": "Invalid 'topics' to publish {'other'}"
+   }
+  },
+  "status": 401,
+  "www": "Bearer"
+ },
+ "publish_subtopic_under_restricted_token": {
+  "body": {
+   "detail": {
+    "error": "Invalid 'topics' to publish {'policy_data/users'}"
+   }
+  },
+  "status": 401,
+  "www": "Bearer"
+ },
+ "pubsub": {
+  "client_info": {
+   "probe-1": {
+    "client_id": "probe-1",
+    "connect_time": 1787745603.7244089,
+    "query_params": {
+     "__opal_client_id": "probe-1"
+    },
+    "refcount": 1,
+    "source_host": "127.0.0.1",
+    "source_port": 44790,
+    "subscribed_topics": [
+     "policy_data",
+     "policy:.",
+     "policy_data/users"
+    ]
+   }
+  },
+  "notifications": [
+   {
+    "data": {
+     "callback": {
+      "callbacks": []
+     },
+     "entries": [
+      {
+       "config": null,
+       "data": null,
+       "dst_path": "/users",
+       "save_method": "PUT",
+       "topics": [
+        "policy_data",
+        "policy_data/users",
+        "policy_data/users/keys"
+       ],
+       "url": "http://x/y"
+      }
+     ],
+     "id": null,
+     "reason": "probe-publish"
+    },
+    "topic": "policy_data"
+   },
+   {
+    "data": {
+     "callback": {
+      "callbacks": []
+     },
+     "entries": [
+      {
+       "config": null,
+       "data": null,
+       "dst_path": "/users",
+       "save_method": "PUT",
+       "topics": [
+        "policy_data",
+        "policy_data/users",
+        "policy_data/users/keys"
+       ],
+       "url": "http://x/y"
+      }
+     ],
+     "id": null,
+     "reason": "probe-publish"
+    },
+    "topic": "policy_data/users"
+   }
+  ]
+ },
+ "statistics_no_token": {
+  "body": {
+   "detail": {
+    "error": "access token was not provided"
+   }
+  },
+  "status": 401,
+  "www": "Bearer"
+ },
+ "statistics_with_token": {
+  "status": 200
+ },
+ "token_client": {
+  "claims": {
+   "peer_type": "client"
+  },
+  "details_type": "client",
+  "status": 200,
+  "type": "bearer"
+ },
+ "token_datasource_claims": {
+  "peer_type": "datasource",
+  "permitted_topics": [
+   "policy_data"
+  ]
+ },
+ "token_listener_type": "listener",
+ "token_no_master": {
+  "body": {
+   "detail": {
+    "error": "Authorization header is required!"
+   }
+  },
+  "status": 401,
+  "www": "Bearer"
+ },
+ "token_ttl_seconds": 200,
+ "token_wrong_master": {
+  "body": {
+   "detail": {
+    "error": "unauthorized to access this endpoint!",
+    "token": "nope"
+   }
+  },
+  "status": 401,
+  "www": "Bearer"
+ }
+}

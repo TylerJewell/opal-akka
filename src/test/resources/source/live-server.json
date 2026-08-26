@@ -1,0 +1,368 @@
+{
+ "callback_report": {
+  "body": {},
+  "headers": {
+   "content-type": "application/json"
+  },
+  "status": 200
+ },
+ "data_config": {
+  "body": {
+   "entries": [
+    {
+     "config": null,
+     "data": null,
+     "dst_path": "",
+     "periodic_update_interval": null,
+     "save_method": "PUT",
+     "topics": [
+      "policy_data"
+     ],
+     "url": "http://localhost:7002/policy-data"
+    }
+   ]
+  },
+  "headers": {
+   "content-type": "application/json"
+  },
+  "status": 200
+ },
+ "data_config_post_bad": {
+  "body": {
+   "detail": [
+    {
+     "loc": [
+      "body",
+      "entries"
+     ],
+     "msg": "field required",
+     "type": "value_error.missing"
+    }
+   ]
+  },
+  "headers": {
+   "content-type": "application/json"
+  },
+  "status": 422
+ },
+ "data_config_post_empty": {
+  "body": {
+   "status": "ok"
+  },
+  "headers": {
+   "content-type": "application/json"
+  },
+  "status": 200
+ },
+ "data_config_post_entry": {
+  "body": {
+   "status": "ok"
+  },
+  "headers": {
+   "content-type": "application/json"
+  },
+  "status": 200
+ },
+ "healthcheck": {
+  "body": {
+   "status": "ok"
+  },
+  "headers": {
+   "content-type": "application/json"
+  },
+  "status": 200
+ },
+ "jwks": {
+  "body": {},
+  "headers": {
+   "content-type": "application/json"
+  },
+  "status": 200
+ },
+ "loadlimit": {
+  "body": null,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "status": 200
+ },
+ "missing_route": {
+  "body": {
+   "detail": "Not Found"
+  },
+  "headers": {
+   "content-type": "application/json"
+  },
+  "status": 404
+ },
+ "openapi": {
+  "status": 200
+ },
+ "openapi_paths": [
+  "/data/callback_report",
+  "/data/config",
+  "/loadlimit",
+  "/policy",
+  "/policy-data",
+  "/pubsub_client_info",
+  "/statistics",
+  "/stats",
+  "/token",
+  "/webhook"
+ ],
+ "openapi_title": "Opal Server",
+ "policy_data": {
+  "body": {},
+  "headers": {
+   "content-type": "application/json"
+  },
+  "status": 200
+ },
+ "policy_diff": {
+  "body": {
+   "data_modules": [],
+   "deleted_files": {
+    "data_modules": [],
+    "policy_modules": [
+     "envs/prod.rego"
+    ]
+   },
+   "hash": "H2",
+   "manifest": [
+    "rbac.rego",
+    "envs/dev.rego"
+   ],
+   "old_hash": "H1",
+   "policy_modules": [
+    {
+     "package_name": "envs.dev",
+     "path": "envs/dev.rego",
+     "rego": "package envs.dev\n\ny = 2\n"
+    },
+    {
+     "package_name": "rbac",
+     "path": "rbac.rego",
+     "rego": "package rbac\n\nallow = false\n"
+    }
+   ]
+  },
+  "headers": {
+   "content-type": "application/json"
+  },
+  "status": 200
+ },
+ "policy_full": {
+  "body": {
+   "data_modules": [
+    {
+     "data": "{\"top\": 1}\n",
+     "path": "."
+    },
+    {
+     "data": "{\"env\": \"prod\"}\n",
+     "path": "envs"
+    }
+   ],
+   "deleted_files": null,
+   "hash": "H2",
+   "manifest": [
+    "rbac.rego",
+    "data.json",
+    "envs/data.json",
+    "envs/dev.rego"
+   ],
+   "old_hash": null,
+   "policy_modules": [
+    {
+     "package_name": "rbac",
+     "path": "rbac.rego",
+     "rego": "package rbac\n\nallow = false\n"
+    },
+    {
+     "package_name": "envs.dev",
+     "path": "envs/dev.rego",
+     "rego": "package envs.dev\n\ny = 2\n"
+    }
+   ]
+  },
+  "headers": {
+   "content-type": "application/json"
+  },
+  "status": 200
+ },
+ "policy_path_envs": {
+  "body": {
+   "data_modules": [
+    {
+     "data": "{\"env\": \"prod\"}\n",
+     "path": "envs"
+    }
+   ],
+   "deleted_files": null,
+   "hash": "H2",
+   "manifest": [
+    "envs/data.json",
+    "envs/dev.rego"
+   ],
+   "old_hash": null,
+   "policy_modules": [
+    {
+     "package_name": "envs.dev",
+     "path": "envs/dev.rego",
+     "rego": "package envs.dev\n\ny = 2\n"
+    }
+   ]
+  },
+  "headers": {
+   "content-type": "application/json"
+  },
+  "status": 200
+ },
+ "policy_path_missing": {
+  "body": {
+   "detail": "requested path nope was not found in the policy repo!"
+  },
+  "headers": {
+   "content-type": "application/json"
+  },
+  "status": 404
+ },
+ "policy_path_slash": {
+  "body": {
+   "data_modules": [
+    {
+     "data": "{\"env\": \"prod\"}\n",
+     "path": "envs"
+    }
+   ],
+   "deleted_files": null,
+   "hash": "H2",
+   "manifest": [
+    "envs/data.json",
+    "envs/dev.rego"
+   ],
+   "old_hash": null,
+   "policy_modules": [
+    {
+     "package_name": "envs.dev",
+     "path": "envs/dev.rego",
+     "rego": "package envs.dev\n\ny = 2\n"
+    }
+   ]
+  },
+  "headers": {
+   "content-type": "application/json"
+  },
+  "status": 200
+ },
+ "policy_unknown_base": {
+  "body": {
+   "error": "Uncaught server exception"
+  },
+  "headers": {
+   "content-type": "application/json"
+  },
+  "status": 500
+ },
+ "pubsub_client_info": {
+  "body": {},
+  "headers": {
+   "content-type": "application/json"
+  },
+  "status": 200
+ },
+ "root": {
+  "body": {
+   "status": "ok"
+  },
+  "headers": {
+   "content-type": "application/json"
+  },
+  "status": 200
+ },
+ "scopes_off": {
+  "body": {
+   "detail": "Not Found"
+  },
+  "headers": {
+   "content-type": "application/json"
+  },
+  "status": 404
+ },
+ "statistics": {
+  "body": {
+   "clients": {},
+   "servers": [
+    "38297fddeb45447686854b195b7fa9ab"
+   ],
+   "uptime": "2026-08-26T11:56:40.547436",
+   "version": "0.0.0"
+  },
+  "headers": {
+   "content-type": "application/json"
+  },
+  "status": 200
+ },
+ "stats": {
+  "body": {
+   "client_count": 0,
+   "server_count": 1,
+   "uptime": "2026-08-26T11:56:40.547436",
+   "version": "0.0.0"
+  },
+  "headers": {
+   "content-type": "application/json"
+  },
+  "status": 200
+ },
+ "token_no_master": {
+  "body": {
+   "detail": "opal server was not configured with security, cannot generate tokens!"
+  },
+  "headers": {
+   "content-type": "application/json"
+  },
+  "status": 503
+ },
+ "webhook_github_match": {
+  "body": {
+   "event": "push",
+   "repo_url": "file:///tmp/opal-live-GpNfnZ/policy-repo",
+   "status": "ok"
+  },
+  "headers": {
+   "content-type": "application/json"
+  },
+  "status": 200
+ },
+ "webhook_github_other_repo": {
+  "body": {
+   "event": "push",
+   "status": "ignored"
+  },
+  "headers": {
+   "content-type": "application/json"
+  },
+  "status": 200
+ },
+ "webhook_no_payload": {
+  "body": {
+   "detail": "repo url or full name not found in payload!"
+  },
+  "headers": {
+   "content-type": "application/json"
+  },
+  "status": 400
+ },
+ "webhook_ping": {
+  "body": {
+   "event": "ping",
+   "repo_url": "file:///tmp/opal-live-GpNfnZ/policy-repo",
+   "status": "ok"
+  },
+  "headers": {
+   "content-type": "application/json"
+  },
+  "status": 200
+ }
+}

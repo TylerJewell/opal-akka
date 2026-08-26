@@ -1,0 +1,376 @@
+{
+ "api_bundle_source": {
+  "after_initial_hits": 1,
+  "auth_headers": {
+   "PolicyBundleServerType.AWS_S3/AKIA": [
+    "Authorization",
+    "x-amz-content-sha256",
+    "x-amz-date"
+   ],
+   "PolicyBundleServerType.HTTP/None": []
+  },
+  "commit_message": "new version b7c5840554daad5e14736d3e66e5bcb1b427c285fdd33db5ed0e77de391d4e39",
+  "etag_first_has_changes": false,
+  "etag_second_has_changes": false,
+  "etag_value": "W/\"v1\"",
+  "hash_changed": true,
+  "initial_hash": true,
+  "new_bundle_has_changes": true,
+  "same_bundle_has_changes": false
+ },
+ "base_data_config": {
+  "initial": {
+   "reason": "Initial load",
+   "urls": [
+    "http://one"
+   ]
+  },
+  "periodic_fired_at_least_once": true,
+  "periodic_reasons": [
+   "Periodic Update"
+  ]
+ },
+ "cedar_client_shape": {
+  "has_static_cache": false,
+  "methods": [
+   "delete_policy",
+   "delete_policy_data",
+   "end_transcation",
+   "full_export",
+   "full_import",
+   "get_data",
+   "get_data_with_input",
+   "get_policies",
+   "get_policy",
+   "get_policy_module_ids",
+   "get_policy_version",
+   "init_healthcheck_policy",
+   "is_healthy",
+   "is_ready",
+   "log_transaction",
+   "set_policies",
+   "set_policy",
+   "set_policy_data",
+   "start_liveness_probe",
+   "start_transaction",
+   "stop_liveness_probe",
+   "transaction_context"
+  ]
+ },
+ "cli_surface": {
+  "generate_secret_default_len": 11,
+  "generate_secret_hex_len": 16,
+  "no_subcommand_exit": 0,
+  "no_subcommand_mentions_usage": true,
+  "opal_client.cli": {
+   "commands": [
+    "generate-secret",
+    "obtain-token",
+    "print-config",
+    "publish-data-update",
+    "run",
+    "version"
+   ],
+   "exit": 0
+  },
+  "opal_server.cli": {
+   "commands": [
+    "generate-secret",
+    "obtain-token",
+    "print-config",
+    "publish-data-update",
+    "run",
+    "version"
+   ],
+   "exit": 0
+  },
+  "publish_no_args": "You must provide either multiple entries (-e / --entries) or a single entry update (--src_url)\n/home/tyler/opal-venv2/lib/python3.12/site-packages/click/core.py",
+  "version": "0.0.0"
+ },
+ "data_write": {
+  "fetch_failure_report": [
+   {
+    "fetched": false,
+    "hash": null,
+    "saved": false
+   }
+  ],
+  "list_at_root": [
+   [
+    "begin",
+    null
+   ],
+   [
+    "set_policy_data",
+    "",
+    [
+     1,
+     2
+    ]
+   ],
+   [
+    "remote",
+    "http://a",
+    true,
+    ""
+   ],
+   [
+    "end",
+    null
+   ]
+  ],
+  "no_topics": [],
+  "partial_failure": [
+   [
+    "begin",
+    null
+   ],
+   [
+    "end",
+    null
+   ],
+   [
+    "begin",
+    null
+   ],
+   [
+    "set_policy_data",
+    "/b",
+    {
+     "v": "http://ok"
+    }
+   ],
+   [
+    "end",
+    null
+   ]
+  ],
+  "patch_inline": [
+   [
+    "begin",
+    null
+   ],
+   [
+    "patch_policy_data",
+    "/users",
+    [
+     "op='add' path='/x' value=1 from_field=None"
+    ]
+   ],
+   [
+    "remote",
+    "http://a",
+    true,
+    ""
+   ],
+   [
+    "end",
+    null
+   ]
+  ],
+  "put_named_path": [
+   [
+    "begin",
+    null
+   ],
+   [
+    "set_policy_data",
+    "/users",
+    {
+     "v": 1
+    }
+   ],
+   [
+    "remote",
+    "http://a",
+    true,
+    ""
+   ],
+   [
+    "end",
+    null
+   ]
+  ],
+  "split_root": [
+   [
+    "begin",
+    null
+   ],
+   [
+    "set_policy_data",
+    "/k1",
+    1
+   ],
+   [
+    "set_policy_data",
+    "/k2",
+    2
+   ],
+   [
+    "remote",
+    "http://a",
+    true,
+    ""
+   ],
+   [
+    "end",
+    null
+   ]
+  ],
+  "topic_mismatch": [],
+  "write_failure_report": [
+   {
+    "fetched": true,
+    "hash": "9ab2253fc38981f5be9c25cf0a34b62cdf334652344bdef16b3d5dbc0b74f2f1",
+    "saved": false
+   }
+  ]
+ },
+ "fetcher_engine": {
+  "builtin_names": [
+   "FastApiRpcFetchProvider",
+   "HttpFetchProvider"
+  ],
+  "handle_url": "http://y",
+  "queued_event_fetcher": "Recording",
+  "queued_event_has_id": true,
+  "registered": "RecordingProvider",
+  "unknown_fetcher": "NoMatchingFetchProviderException"
+ },
+ "health_policy_render": {
+  "code": "package system.opal.transactions\n\ndefault ready = false\nready = false\ndefault healthy = false\nhealthy = false\nlast_policy_transaction = {\"id\": \"1\", \"actions\": [\"set_policies\"], \"transaction_type\": \"policy\", \"success\": true, \"error\": \"\", \"creation_time\": \"t0\", \"end_time\": \"t1\", \"remotes_status\": null}\nlast_data_transaction = {}\nlast_failed_policy_transaction = {}\nlast_failed_data_transaction = {}\ntransaction_data_statistics = {\"successful\": 0, \"failed\": 0}\ntransaction_policy_statistics = {\"successful\": 1, \"failed\": 0}\n",
+  "id": "system/opal/transactions"
+ },
+ "http_fetch_provider": {
+  "get_json": {
+   "auth": null,
+   "method": "GET",
+   "path": "/x"
+  },
+  "no_process": "ClientResponse",
+  "post": {
+   "auth": null,
+   "method": "POST",
+   "path": "/x"
+  },
+  "raw_text": "{\"method\": \"GET\", \"path\": \"/x\", \"auth\": null}",
+  "with_headers": {
+   "auth": "Bearer T",
+   "method": "GET",
+   "path": "/x"
+  }
+ },
+ "policy_store_auth": {
+  "none": "ok",
+  "oauth_missing": "Exception: required variables for oauth are not set",
+  "oauth_ok": "ok",
+  "tls_missing": "Exception: required variables for tls are not set",
+  "token_missing": "Exception: required variables for token auth are not set",
+  "token_ok": "ok"
+ },
+ "policy_store_order": {
+  "complete_bundle_calls": [
+   [
+    "set_policy_data",
+    "/d"
+   ],
+   [
+    "set_policy",
+    "b.rego"
+   ],
+   [
+    "set_policy",
+    "a.rego"
+   ],
+   [
+    "delete_policy",
+    "stale.rego"
+   ]
+  ],
+  "complete_bundle_version": "H2",
+  "delta_bundle_calls": [
+   [
+    "set_policy_data",
+    "/e"
+   ],
+   [
+    "delete_policy_data",
+    "/gone"
+   ],
+   [
+    "set_policy",
+    "b.rego"
+   ],
+   [
+    "delete_policy",
+    "a.rego"
+   ]
+  ],
+  "delta_bundle_version": "H3"
+ },
+ "postponed_retry": {
+  "all_fail": "Giving up setting / deleting failed modules to OPA",
+  "all_fail_attempts": [
+   "x",
+   "y"
+  ],
+  "reordered": {
+   "attempts": [
+    "b",
+    "a",
+    "b"
+   ],
+   "written": [
+    "a",
+    "b"
+   ]
+  }
+ },
+ "webhook_secrets": {
+  "no_secret_configured": true,
+  "payload_shapes": {
+   "azure": {
+    "branch": "main",
+    "names": [],
+    "urls": [
+     "https://dev.azure.com/o/r"
+    ]
+   },
+   "bare_ref": {
+    "branch": "main",
+    "names": [],
+    "urls": [
+     "https://x/y"
+    ]
+   },
+   "empty": "HTTPException:400:repo url or full name not found in payload!",
+   "github": {
+    "branch": "main",
+    "names": [
+     "o/r"
+    ],
+    "urls": [
+     "git://github.com/o/r.git",
+     "git@github.com:o/r.git",
+     "https://github.com/o/r.git"
+    ]
+   },
+   "gitlab": {
+    "branch": "main",
+    "names": [
+     "o/r"
+    ],
+    "urls": [
+     "git@gitlab.com:o/r.git",
+     "https://gitlab.com/o/r.git"
+    ]
+   }
+  },
+  "signature_missing": "HTTPException:401:No secret was provided!",
+  "signature_ok": true,
+  "signature_unparseable": "HTTPException:401:No secret was provided!",
+  "signature_wrong": "HTTPException:401:signatures didn't match!",
+  "token_ok": true,
+  "token_wrong": "HTTPException:401:secret-tokens didn't match!"
+ }
+}

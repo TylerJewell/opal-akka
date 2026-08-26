@@ -2,3 +2,6 @@ target/
 .idea/
 *.iml
 .DS_Store
+
+# Written by a run: the JWKS a server publishes when it is told to keep one on disk.
+jwks_dir/

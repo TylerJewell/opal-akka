@@ -1,0 +1,150 @@
+{
+ "clone_dirs_after_deleting_sibling": [],
+ "clone_dirs_two_scopes_one_source": [],
+ "delete_beta": 204,
+ "delete_unknown": 204,
+ "get_all_scopes_has_auth": false,
+ "get_all_scopes_ids": [
+  "alpha",
+  "beta",
+  "default"
+ ],
+ "get_scope_alpha": {
+  "data": {
+   "entries": [
+    {
+     "config": null,
+     "data": null,
+     "dst_path": "",
+     "periodic_update_interval": null,
+     "save_method": "PUT",
+     "topics": [
+      "policy_data"
+     ],
+     "url": "http://alpha/data"
+    }
+   ]
+  },
+  "policy": {
+   "branch": "main",
+   "bundle_ignore": null,
+   "directories": [
+    "."
+   ],
+   "extensions": [
+    ".rego",
+    ".json"
+   ],
+   "manifest": "",
+   "poll_updates": false,
+   "source_type": "git",
+   "url": "file:///tmp/opal-scopes-x4iRuC/policy-repo"
+  },
+  "scope_id": "alpha"
+ },
+ "get_scope_unknown": {
+  "body": {
+   "detail": "No such scope: nope"
+  },
+  "status": 404
+ },
+ "get_scopes_client_token": 401,
+ "internal_stats": {
+  "keys": [
+   "pid",
+   "repo_locks",
+   "repo_locks_keys",
+   "repos",
+   "repos_keys",
+   "repos_last_fetched",
+   "repos_last_fetched_keys",
+   "rss_kb"
+  ],
+  "status": 200
+ },
+ "internal_stats_disabled_on_plain": 404,
+ "loadlimit_sequence_2_per_minute": [
+  200,
+  200,
+  429,
+  429
+ ],
+ "loadlimit_unlimited_on_plain": [
+  200,
+  200,
+  200,
+  200
+ ],
+ "put_scope_alpha": 201,
+ "put_scope_beta": 201,
+ "put_scope_client_token": {
+  "body": {
+   "detail": {
+    "error": "Incorrect 'peer_type' claim for OPAL jwt token: PeerType.client, expected: PeerType.datasource"
+   }
+  },
+  "status": 401
+ },
+ "put_scope_default": 201,
+ "put_scope_no_token": 401,
+ "put_scope_ssh_invalid": {
+  "body": {
+   "detail": {
+    "error": "private key is invalid"
+   }
+  },
+  "status": 422
+ },
+ "put_scope_ssh_no_newline": {
+  "body": {
+   "detail": {
+    "error": "private key is expected to contain newlines!"
+   }
+  },
+  "status": 422
+ },
+ "refresh_all": 200,
+ "refresh_alpha": 200,
+ "refresh_alpha_hinted": 200,
+ "refresh_unknown": {
+  "body": {
+   "detail": "No such scope: nope"
+  },
+  "status": 404
+ },
+ "scope_data_alpha": {
+  "detail": "Forbidden"
+ },
+ "scope_data_unknown": {
+  "detail": "Forbidden"
+ },
+ "scope_data_update": 200,
+ "scope_policy_alpha": {
+  "manifest": [
+   "data.json",
+   "rbac.rego",
+   "envs/prod.rego"
+  ],
+  "status": 200
+ },
+ "scope_policy_unknown_scope": {
+  "status": 403
+ },
+ "scope_policy_wrong_scope_claim": 403,
+ "statistics_off": {
+  "body": {
+   "detail": {
+    "error": "This OPAL server does not have statistics turned on. To turn on, set this config var: OPAL_STATISTICS_ENABLED=true"
+   }
+  },
+  "status": 501
+ },
+ "stats_off": {
+  "body": {
+   "detail": {
+    "error": "This OPAL server does not have statistics turned on. To turn on, set this config var: OPAL_STATISTICS_ENABLED=true"
+   }
+  },
+  "status": 501
+ }
+}

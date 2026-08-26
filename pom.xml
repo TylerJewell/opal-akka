@@ -11,4 +11,94 @@
     <version>1.0-SNAPSHOT</version>
     <packaging>jar</packaging>
     <name>opal-akka</name>
+
+    <dependencies>
+        <!--
+          Logging is configured from OPAL's own `LOG_*` entries at start-up, which means calling
+          logback's own API. logback 1.5 is built against the slf4j 2 API, and the version the
+          parent resolves is 1.7 - close enough to link at runtime and not close enough to
+          compile against, so the newer API is named here.
+        -->
+        <dependency>
+            <groupId>org.slf4j</groupId>
+            <artifactId>slf4j-api</artifactId>
+            <version>2.0.17</version>
+        </dependency>
+        <!-- The policy repository: clone, fetch, walk a commit tree, diff two commits. -->
+        <dependency>
+            <groupId>org.eclipse.jgit</groupId>
+            <artifactId>org.eclipse.jgit</artifactId>
+            <version>7.1.0.202411261347-r</version>
+        </dependency>
+        <dependency>
+            <groupId>org.eclipse.jgit</groupId>
+            <artifactId>org.eclipse.jgit.ssh.jsch</artifactId>
+            <version>7.1.0.202411261347-r</version>
+        </dependency>
+        <!-- JWT signing and verification, and the JWK the JWKS route serves. -->
+        <dependency>
+            <groupId>com.nimbusds</groupId>
+            <artifactId>nimbus-jose-jwt</artifactId>
+            <version>9.41.2</version>
+        </dependency>
+        <!-- PEM, OpenSSH and DER key parsing, which the JDK does not do on its own. -->
+        <dependency>
+            <groupId>org.bouncycastle</groupId>
+            <artifactId>bcpkix-jdk18on</artifactId>
+            <version>1.79</version>
+        </dependency>
+        <!-- The three optional broadcast backbones between server replicas. -->
+        <dependency>
+            <groupId>redis.clients</groupId>
+            <artifactId>jedis</artifactId>
+            <version>5.2.0</version>
+        </dependency>
+        <dependency>
+            <groupId>org.postgresql</groupId>
+            <artifactId>postgresql</artifactId>
+            <version>42.7.4</version>
+            <exclusions>
+                <!-- Newer than the one the Akka runtime puts on the classpath. -->
+                <exclusion>
+                    <groupId>org.checkerframework</groupId>
+                    <artifactId>checker-qual</artifactId>
+                </exclusion>
+            </exclusions>
+        </dependency>
+        <dependency>
+            <groupId>org.apache.kafka</groupId>
+            <artifactId>kafka-clients</artifactId>
+            <version>3.9.0</version>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <plugins>
+            <!--
+              One JVM per test class. Each integration test configures the service the way OPAL is
+              configured - process-wide, read once at start-up - so two of them in one JVM would
+              have the second run under the first one's settings.
+            -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-surefire-plugin</artifactId>
+                <configuration>
+                    <forkCount>1</forkCount>
+                    <reuseForks>false</reuseForks>
+                    <!-- The integration tests belong to failsafe, which starts a runtime for them. -->
+                    <excludes>
+                        <exclude>**/*IntegrationTest.java</exclude>
+                    </excludes>
+                </configuration>
+            </plugin>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-failsafe-plugin</artifactId>
+                <configuration>
+                    <forkCount>1</forkCount>
+                    <reuseForks>false</reuseForks>
+                </configuration>
+            </plugin>
+        </plugins>
+    </build>
 </project>
