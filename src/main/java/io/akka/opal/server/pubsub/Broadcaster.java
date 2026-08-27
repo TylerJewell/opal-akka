@@ -92,6 +92,15 @@ public interface Broadcaster extends AutoCloseable {
   /** R209: run when the reader gives up, so the process can be replaced. */
   void setOnGiveUp(Runnable onGiveUp);
 
+  /**
+   * R337: run when the reader loop has ended for any reason while the process is still up.
+   *
+   * <p>A worker that is no longer reading the backbone cannot keep fleet statistics that
+   * anybody should believe, so the server ends the process and lets a supervisor start a
+   * replacement that reads again.
+   */
+  void setOnReaderEnded(Runnable onReaderEnded);
+
   @Override
   void close();
 }

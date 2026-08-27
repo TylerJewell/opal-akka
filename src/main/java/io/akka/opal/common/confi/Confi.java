@@ -33,6 +33,8 @@ public class Confi {
 
   private static final ObjectMapper MAPPER = new ObjectMapper();
 
+  private static final org.slf4j.Logger LOG = org.slf4j.LoggerFactory.getLogger(Confi.class);
+
   private final String prefix;
   private final Map<String, String> environment;
   private final Map<String, ConfiEntry<?>> entries = new LinkedHashMap<>();
@@ -93,12 +95,27 @@ public class Confi {
     if (entry.isDelayed()) {
       delayed.add(entry);
       if (raw != null) {
-        typed.set(entry.cast().apply(raw));
+        typed.set(cast(entry, raw));
       }
     } else {
-      typed.set(raw != null ? entry.cast().apply(raw) : entry.rawDefault());
+      typed.set(raw != null ? cast(entry, raw) : entry.rawDefault());
     }
     return entry;
+  }
+
+  /**
+   * R270: a value that will not cast names the entry it came from before the failure escapes.
+   *
+   * <p>The cast function has only the value, so the message it raises says what was wrong and not
+   * where it was read; an operator reading a start-up failure needs the key.
+   */
+  private Object cast(ConfiEntry<?> entry, String raw) {
+    try {
+      return entry.cast().apply(raw);
+    } catch (RuntimeException e) {
+      LOG.error("Failed parsing config key- {}", entry.key());
+      throw e;
+    }
   }
 
   protected ConfiEntry<String> str(String name, String def, String description) {
@@ -135,7 +152,27 @@ public class Confi {
   }
 
   protected ConfiEntry<List<String>> list(String name, List<String> def, String description) {
-    return add(new ConfiEntry<>(name, name, description, "list", Confi::castList, def, null, null));
+    return list(name, def, description, ",");
+  }
+
+  /**
+   * A list entry with a separator of its own.
+   *
+   * <p>One entry in OPAL is colon-separated rather than comma-separated, because the values are
+   * directory paths and a comma is legal in one.
+   */
+  protected ConfiEntry<List<String>> list(
+      String name, List<String> def, String description, String delimiter) {
+    return add(
+        new ConfiEntry<>(
+            name,
+            name,
+            description,
+            "list",
+            value -> castList(value, delimiter),
+            def,
+            null,
+            null));
   }
 
   protected <T> ConfiEntry<T> model(String name, Class<T> type, T def, String description) {
@@ -177,14 +214,24 @@ public class Confi {
    * no newline in it has every underscore turned back into one.
    */
   protected ConfiEntry<String> key(
-      String name, String description, java.util.function.Supplier<Object> format) {
+      String name,
+      String description,
+      java.util.function.Supplier<Object> format,
+      boolean isPublic) {
     return add(
         new ConfiEntry<>(
             name,
             name,
             description,
             "Union",
-            s -> Keys.decode(s, String.valueOf(format.get())),
+            s -> {
+              try {
+                return Keys.decode(s, String.valueOf(format.get()), isPublic);
+              } catch (RuntimeException e) {
+                LOG.error("could not read " + name, e);
+                throw e;
+              }
+            },
             null,
             null,
             null));
@@ -193,24 +240,21 @@ public class Confi {
   // -- casts ---------------------------------------------------------------
 
   /**
-   * R2: the four spellings of each boolean and nothing else. Enumerated rather than delegated to
-   * a permissive parser, because {@code yes} and the empty string are failures in the source and
-   * a parser that accepted them would give a deployment a different answer.
+   * R2: {@code true} or {@code 1} in any casing, {@code false} or {@code 0} in any casing, and
+   * nothing else. Enumerated rather than delegated to a permissive parser, because {@code yes},
+   * {@code on} and the empty string are failures in the source and a parser that accepted them
+   * would give a deployment a different answer.
    */
   public static boolean castBoolean(String value) {
-    switch (value) {
+    switch (value.toLowerCase(java.util.Locale.ROOT)) {
       case "true":
-      case "TRUE":
-      case "True":
       case "1":
         return true;
       case "false":
-      case "FALSE":
-      case "False":
       case "0":
         return false;
       default:
-        throw new BadValue(value.toLowerCase() + " - is not a valid boolean");
+        throw new BadValue(value.toLowerCase(java.util.Locale.ROOT) + " - is not a valid boolean");
     }
   }
 
@@ -232,10 +276,16 @@ public class Confi {
 
   /** R3: comma separated, each element stripped of surrounding whitespace. */
   public static List<String> castList(String value) {
+    return castList(value, ",");
+  }
+
+  public static List<String> castList(String value, String delimiter) {
     if (value.isEmpty()) {
       return List.of();
     }
-    return Arrays.stream(value.split(",", -1)).map(String::strip).toList();
+    return Arrays.stream(value.split(java.util.regex.Pattern.quote(delimiter), -1))
+        .map(String::strip)
+        .toList();
   }
 
   public static <T> T castModel(String value, Class<T> type) {
@@ -277,6 +327,36 @@ public class Confi {
     } catch (Exception ex) {
       return sorted.toString();
     }
+  }
+
+  /**
+   * R271: the entries with each value's {@code repr} rather than its string form.
+   *
+   * <p>Sorted by name, four spaces of indent, and the class's own name on the first line. More
+   * accurate than {@link #printConfig()} for a value whose string form loses its type — an empty
+   * string and a null read the same there and not here.
+   */
+  /**
+   * The name this configuration object reports as its own.
+   *
+   * <p>R271 prints it, so it is part of what a caller diffing the two systems' {@code debug_repr}
+   * sees. The source's own class names are what that caller has seen before, so those are what is
+   * reported rather than this rebuild's.
+   */
+  protected String configName() {
+    return getClass().getSimpleName();
+  }
+
+  public String debugRepr() {
+    StringBuilder text = new StringBuilder(configName()).append("(Confi):\n");
+    for (String name : new TreeMap<>(entries).keySet()) {
+      text.append("    ")
+          .append(name)
+          .append(": ")
+          .append(Repr.repr(entries.get(name).value()))
+          .append('\n');
+    }
+    return text.toString();
   }
 
   /**

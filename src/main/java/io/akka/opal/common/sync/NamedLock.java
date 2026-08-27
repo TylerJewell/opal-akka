@@ -80,12 +80,15 @@ public final class NamedLock implements AutoCloseable {
       if (parent != null) {
         Files.createDirectories(parent);
       }
+      // R380: truncated on acquire. The file is a lock and not a record, and whatever a previous
+      // holder left in it would otherwise be read back by anything that opens it looking for one.
       channel =
           FileChannel.open(
               path,
               StandardOpenOption.CREATE,
               StandardOpenOption.READ,
-              StandardOpenOption.WRITE);
+              StandardOpenOption.WRITE,
+              StandardOpenOption.TRUNCATE_EXISTING);
       lock = channel.tryLock();
       if (lock == null) {
         channel.close();

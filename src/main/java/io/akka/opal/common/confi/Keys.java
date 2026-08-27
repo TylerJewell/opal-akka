@@ -10,14 +10,16 @@ import java.nio.file.Path;
  * text itself, and text carrying no newline has every underscore turned back into one, because
  * that is how a multi-line key survives an environment variable.
  *
- * <p>The rule is not applied to a public key in SSH format: that format is one line, so an
- * underscore in it is part of the key rather than a folded newline.
+ * <p>The rule is not applied to a <em>public</em> key in SSH format: that format is one line, so
+ * an underscore in it is part of the key rather than a folded newline. A private key is folded
+ * whatever its format says, because no one-line private format exists for the underscore rule to
+ * be wrong about.
  */
 public final class Keys {
 
   private Keys() {}
 
-  public static String decode(String value, String keyFormat) {
+  public static String decode(String value, String keyFormat, boolean isPublic) {
     if (value == null) {
       return null;
     }
@@ -35,7 +37,7 @@ public final class Keys {
         }
       }
     }
-    if ("ssh".equalsIgnoreCase(keyFormat) && isPublicOneLine(value)) {
+    if (isPublic && "ssh".equalsIgnoreCase(keyFormat)) {
       return value;
     }
     return maybeDecodeMultiline(value);
@@ -48,11 +50,6 @@ public final class Keys {
     }
     String decoded = key.replace('_', '\n');
     return decoded.endsWith("\n") ? decoded : decoded + "\n";
-  }
-
-  /** An OpenSSH public key is {@code <type> <base64> [comment]} — three fields on one line. */
-  static boolean isPublicOneLine(String value) {
-    return value.startsWith("ssh-") || value.startsWith("ecdsa-") || value.startsWith("sk-");
   }
 
   static boolean couldBeAPath(String value) {

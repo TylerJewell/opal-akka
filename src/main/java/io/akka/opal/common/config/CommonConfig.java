@@ -17,6 +17,12 @@ import java.util.Map;
  */
 public final class CommonConfig extends Confi {
 
+  @Override
+  protected String configName() {
+    return "OpalCommonConfig";
+  }
+
+
   static final String LOG_FORMAT_WITHOUT_PID =
       "<green>{time}</green> | <blue>{name: <40}</blue>|<level>{level:^6} | {message}</level>\n{exception}";
   static final String LOG_FORMAT_WITH_PID =
@@ -29,7 +35,7 @@ public final class CommonConfig extends Confi {
   }
 
   public CommonConfig() {
-    this(System.getenv());
+    this(io.akka.opal.common.confi.ConfigFiles.overlay(System.getenv()));
   }
 
   private void declare() {
@@ -68,7 +74,7 @@ public final class CommonConfig extends Confi {
     str("CLIENT_SSL_CONTEXT_TRUSTED_CA_FILE", null, "A path to your own CA public certificate file (usually a .crt or a .pem file). Certificates signed by this issuer will be trusted by OPAL Client. DO NOT USE THIS IN PRODUCTION!");
     enumeration("AUTH_PUBLIC_KEY_FORMAT", EncryptionKeyFormat.class, EncryptionKeyFormat.ssh, "Format of the public key for authentication");
     key("AUTH_PUBLIC_KEY", "Public key for authentication",
-            () -> get("AUTH_PUBLIC_KEY_FORMAT"));
+            () -> get("AUTH_PUBLIC_KEY_FORMAT"), true);
     enumeration("AUTH_JWT_ALGORITHM", JWTAlgorithm.class, JWTAlgorithm.RS256, "jwt algorithm, possible values: see: https://pyjwt.readthedocs.io/en/stable/algorithms.html");
     str("AUTH_JWT_AUDIENCE", "https://api.opal.ac/v1/", "Audience for JWT authentication");
     str("AUTH_JWT_ISSUER", "https://opal.ac/", "Issuer for JWT authentication");

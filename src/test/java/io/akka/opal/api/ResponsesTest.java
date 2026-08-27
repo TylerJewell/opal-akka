@@ -36,8 +36,12 @@ class ResponsesTest {
   }
 
   private static final Pattern ROUTE =
-      Pattern.compile("@(?:Get|Post|Put|Patch|Delete)\\(\"[^\"]*\"\\)\\s*\\n"
-          + "\\s*public HttpResponse (\\w+)\\(([^)]*)\\) \\{\\n(\\s*)(.*)");
+      // `\R` rather than `\n`: a working copy checked out with the platform's line endings has
+      // carriage returns in it, and a census that matches only one of the two under-counts
+      // silently — which reads as "these routes do not exist" rather than as "this scan did not
+      // look at them".
+      Pattern.compile("@(?:Get|Post|Put|Patch|Delete)\\(\"[^\"]*\"\\)\\s*\\R"
+          + "\\s*public HttpResponse (\\w+)\\(([^)]*)\\) \\{\\R([ \\t]*)(.*)");
 
   /** R130: an unplanned failure becomes the source's own body, and is not re-raised. */
   @Test

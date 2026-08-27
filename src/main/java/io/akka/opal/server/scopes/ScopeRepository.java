@@ -2,18 +2,19 @@ package io.akka.opal.server.scopes;
 
 import akka.javasdk.client.ComponentClient;
 import io.akka.opal.common.schemas.Scopes;
-import io.akka.opal.server.pubsub.Rpc;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 
 /**
- * Reading and writing scopes through the entity that holds them.
+ * Reading and writing scopes through the entities that hold them.
  *
- * <p>A read of one scope goes to the entity, and a read of all of them goes to the view. The two
- * are not the same freshness: the view is a projection and lags a write by the time it takes to
- * be applied, which is why {@code PUT} then {@code GET /scopes/{id}} is consistent and
- * {@code PUT} then {@code GET /scopes} may not be.
+ * <p>R400: every read goes to an entity, one scope at a time, with the set of ids read from an
+ * index entity written before the scope it names. A projection would answer the listing more
+ * cheaply and would answer it late, and the listing is what a purge's sibling check reads before
+ * deciding whether a clone is still wanted — so {@code PUT} then {@code GET /scopes} shows the
+ * new scope, and a delete published a moment after a sibling was created does not remove that
+ * sibling's clone.
  */
 public final class ScopeRepository {
 
@@ -51,6 +52,13 @@ public final class ScopeRepository {
   }
 
   public void put(Scopes.Scope scope) {
+    // The id is registered first: an id in the index whose scope is not there yet is skipped by
+    // the listing, and a scope not in the index is invisible to the sibling check that decides
+    // whether its clone survives somebody else's delete. Only the first of those is harmless.
+    componentClient
+        .forKeyValueEntity(ScopeIndexEntity.ID)
+        .method(ScopeIndexEntity::add)
+        .invoke(scope.scope_id());
     componentClient
         .forKeyValueEntity(scope.scope_id())
         .method(ScopeEntity::put)
@@ -59,30 +67,34 @@ public final class ScopeRepository {
 
   public void delete(String scopeId) {
     componentClient.forKeyValueEntity(scopeId).method(ScopeEntity::delete).invoke();
+    componentClient
+        .forKeyValueEntity(ScopeIndexEntity.ID)
+        .method(ScopeIndexEntity::remove)
+        .invoke(scopeId);
   }
 
-  private static final org.slf4j.Logger log =
-      org.slf4j.LoggerFactory.getLogger(ScopeRepository.class);
-
   public List<Scopes.Scope> all() {
-    ScopesView.ScopeEntries rows =
-        componentClient.forView().method(ScopesView::allScopes).invoke();
+    ScopeIndexEntity.State index =
+        componentClient
+            .forKeyValueEntity(ScopeIndexEntity.ID)
+            .method(ScopeIndexEntity::get)
+            .invoke();
     List<Scopes.Scope> scopes = new ArrayList<>();
-    if (rows == null || rows.scopes() == null) {
+    if (index == null) {
       return scopes;
     }
-    for (ScopesView.ScopeEntry row : rows.scopes()) {
-      // R245: a row this cannot read is skipped rather than failing the listing. Every pass over
-      // the scopes — the periodic sync, the purge's sibling check, the listing route — reads this,
-      // and one unreadable row would otherwise stop all of them for every other tenant.
-      if (row.scopeJson() == null || row.scopeJson().isEmpty()) {
+    for (String scopeId : index.scopeIds()) {
+      // R245: an id whose scope is not there is one deleted between this listing and the read,
+      // or one registered by a write that has not landed yet, and neither is a scope. A scope
+      // that IS there and does not parse is corruption, and is raised — dropping it silently
+      // takes the scope out of the listing, out of the sync, and out of the sibling check a
+      // delete's purge reads, which is what decides whether a live tenant's clone is removed.
+      ScopeEntity.State state =
+          componentClient.forKeyValueEntity(scopeId).method(ScopeEntity::get).invoke();
+      if (state == null || !state.exists()) {
         continue;
       }
-      try {
-        scopes.add(Rpc.MAPPER.readValue(row.scopeJson(), Scopes.Scope.class));
-      } catch (Exception e) {
-        log.warn("skipping scope {}, which could not be read: {}", row.scopeId(), e.toString());
-      }
+      scopes.add(state.scope());
     }
     return scopes;
   }

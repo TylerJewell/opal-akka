@@ -51,7 +51,9 @@ class ClientLifecycleTest {
   @Test
   void theDefaultScopeSubscribesByDirectory() {
     ClientRuntime runtime =
-        runtimeWith(Map.of("OPAL_POLICY_SUBSCRIPTION_DIRS", "a,a/b,c", "OPAL_DATA_TOPICS", "t1,t2"));
+        runtimeWith(
+            // Colon-separated, because a directory path may hold a comma — C-123.
+            Map.of("OPAL_POLICY_SUBSCRIPTION_DIRS", "a:a/b:c", "OPAL_DATA_TOPICS", "t1,t2"));
     assertEquals(List.of("policy:a", "policy:c"), sorted(runtime.policyTopics()));
     assertEquals(List.of("t1", "t2"), runtime.dataTopics());
   }

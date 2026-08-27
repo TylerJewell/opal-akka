@@ -62,7 +62,13 @@ public final class PolicyFetcher {
       }
     }
     log.warn("Failed all attempts to fetch bundle, got error: {}", last);
-    throw new IllegalStateException("could not fetch a policy bundle", last);
+    // R297: the last failure is raised as it was, not wrapped. What it says is what the
+    // transaction log records as the reason, and a wrapper there replaces the 404 or the parse
+    // failure a reader needs with the fact that a fetch was attempted.
+    if (last instanceof RuntimeException runtime) {
+      throw runtime;
+    }
+    throw new IllegalStateException(last == null ? "could not fetch a policy bundle" : last.toString(), last);
   }
 
   private Policy.PolicyBundle fetchOnce(List<String> directories, String baseHash)
@@ -86,19 +92,42 @@ public final class PolicyFetcher {
       request.header("Authorization", "Bearer " + token);
     }
     HttpResponse<String> response =
-        http.send(request.build(), HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+        io.akka.opal.common.util.Http.send(
+            http, request.build(), HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
     if (response.statusCode() == 404) {
+      // R360: its own type. A caller distinguishing "this bundle does not exist" from "the server
+      // would not answer" is deciding between editing its subscription and retrying, and reading
+      // that off a message means matching on text.
       log.warn("requested paths not found: {}", directories);
-      throw new IllegalStateException(
+      throw new BundleNotFound(
           "requested path " + policyEndpointUrl + " was not found in the policy repo!");
     }
     if (response.statusCode() != 200) {
+      // The body is part of the message: the source logs the server's own error alongside the
+      // status, and that text is what ends up in the transaction log a caller reads.
+      log.warn(
+          "Unexpected response code {}: {}", response.statusCode(), response.body());
       throw new IllegalStateException(
           "unexpected response code while fetching bundle: " + response.statusCode());
     }
-    Policy.PolicyBundle bundle =
-        Rpc.MAPPER.readValue(response.body(), Policy.PolicyBundle.class);
+    Policy.PolicyBundle bundle;
+    try {
+      bundle = Rpc.MAPPER.readValue(response.body(), Policy.PolicyBundle.class);
+    } catch (Exception e) {
+      // R361: what would not validate, not only that something did not. The bundle is built by
+      // the server from a repository nobody here can see, and its text is the only evidence of
+      // which field went wrong.
+      log.warn("Got invalid bundle, error: {}, bundle: {}", e.toString(), response.body());
+      throw e;
+    }
     log.info("Fetched valid bundle, id: {}", bundle.hash());
     return bundle;
+  }
+
+  /** R360: the bundle server answered that this path is not in the repository. */
+  public static final class BundleNotFound extends IllegalStateException {
+    public BundleNotFound(String message) {
+      super(message);
+    }
   }
 }

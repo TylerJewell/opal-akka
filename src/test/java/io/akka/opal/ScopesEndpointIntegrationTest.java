@@ -20,6 +20,7 @@ import org.junit.jupiter.api.MethodOrderer;
 import org.junit.jupiter.api.Order;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestMethodOrder;
+import org.junit.jupiter.api.extension.ExtendWith;
 
 /**
  * The multi-tenant routes, over real HTTP — SPEC-002 R102 to R111.
@@ -29,12 +30,13 @@ import org.junit.jupiter.api.TestMethodOrder;
  * independent calls would agree on every row and check none of them.
  */
 @TestMethodOrder(MethodOrderer.OrderAnnotation.class)
+@ExtendWith(OpalProcessExtension.class)
 public class ScopesEndpointIntegrationTest extends TestKitSupport {
 
-  private static final ProbeRepository REPO;
-  private static final Path BASE_DIR;
+  private static ProbeRepository REPO;
+  private static Path BASE_DIR;
 
-  static {
+  static void startProcess() {
     try {
       REPO = new ProbeRepository();
       BASE_DIR = Files.createTempDirectory("opal-scopes-base-");
@@ -303,6 +305,31 @@ public class ScopesEndpointIntegrationTest extends TestKitSupport {
   }
 
   /** R111: two scopes on one source share a clone, and a purge keeps it while one survives. */
+  /**
+   * R400: a scope written a moment ago is in the listing, because the listing reads the store.
+   *
+   * <p>This is what the sibling check a purge performs depends on: a listing that lags a write
+   * says "nobody else uses that source" about a scope somebody has just created against it.
+   */
+  @Test
+  @Order(11)
+  public void aScopeIsListedAsSoonAsItIsWritten() {
+    assertEquals(201, putScope("just-written", "http://just-written/data").status().intValue());
+    StrictResponse<ByteString> listed = httpClient.GET("/scopes").invoke();
+    assertEquals(200, listed.status().intValue());
+    List<String> ids = new ArrayList<>();
+    for (JsonNode scope : body(listed)) {
+      ids.add(scope.get("scope_id").asText());
+    }
+    assertTrue(ids.contains("just-written"), "the listing holds " + ids);
+    assertEquals(204, httpClient.DELETE("/scopes/just-written").invoke().status().intValue());
+    List<String> after = new ArrayList<>();
+    for (JsonNode scope : body(httpClient.GET("/scopes").invoke())) {
+      after.add(scope.get("scope_id").asText());
+    }
+    assertFalse(after.contains("just-written"), "the listing still holds " + after);
+  }
+
   @Test
   @Order(12)
   public void aSharedCloneSurvivesTheFirstDelete() throws Exception {

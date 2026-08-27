@@ -69,6 +69,7 @@ public final class LivenessProbe implements AutoCloseable {
     task =
         scheduler.scheduleWithFixedDelay(
             this::tick, interval.toMillis(), interval.toMillis(), TimeUnit.MILLISECONDS);
+    watchForTaskEnd(task);
     log.info(
         "Started {} liveness probe (interval={}s, timeout={}s, initial_reachable={})",
         label,
@@ -78,11 +79,55 @@ public final class LivenessProbe implements AutoCloseable {
   }
 
   private void tick() {
-    boolean reachable = sample();
-    if (reachable != getReachable.getAsBoolean()) {
-      log.info("{} reachability changed to {}", label, reachable);
-      setReachable.accept(reachable);
+    boolean reachable;
+    try {
+      reachable = sample();
+    } catch (RuntimeException e) {
+      // R365: a probe that failed for its own reasons, rather than an engine that is not there.
+      // The engine is still counted unreachable, and the two are told apart in the log because
+      // they call for different repairs.
+      log.warn(
+          "{} liveness probe encountered an unexpected error (treating engine as unreachable):"
+              + " {}",
+          label,
+          e.toString());
+      reachable = false;
     }
+    if (reachable != getReachable.getAsBoolean()) {
+      log.info(
+          "{} liveness probe: engine became {}", label, reachable ? "reachable" : "unreachable");
+      setReachable.accept(reachable);
+    } else {
+      // R366: every sample, at debug. The change lines alone leave a probe that has been running
+      // for an hour indistinguishable from one that stopped after its first reading.
+      log.debug("{} liveness probe sample: reachable={}", label, reachable);
+    }
+  }
+
+  /**
+   * R367: says so when the scheduled probe stops for a reason nobody asked for.
+   *
+   * <p>A scheduled task that throws is dropped by the scheduler and never runs again, so the
+   * reachability the health route reports freezes at whatever it last was — which reads exactly
+   * like an engine that has been fine ever since.
+   */
+  private void watchForTaskEnd(java.util.concurrent.ScheduledFuture<?> scheduled) {
+    Thread watcher =
+        new Thread(
+            () -> {
+              try {
+                scheduled.get();
+              } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+              } catch (java.util.concurrent.CancellationException e) {
+                // Asked for: the probe was closed.
+              } catch (Exception e) {
+                log.error("{} liveness probe task exited unexpectedly: {}", label, e.toString());
+              }
+            },
+            "opal-liveness-watch");
+    watcher.setDaemon(true);
+    watcher.start();
   }
 
   /**

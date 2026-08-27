@@ -62,7 +62,8 @@ public final class HttpFetchProvider implements FetchProvider {
     }
     try {
       HttpResponse<String> response =
-          http.send(builder.build(), HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+          io.akka.opal.common.util.Http.send(
+              http, builder.build(), HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
       if (response.statusCode() >= 400) {
         throw new IllegalStateException(
             "Failed to decode response from url: '"

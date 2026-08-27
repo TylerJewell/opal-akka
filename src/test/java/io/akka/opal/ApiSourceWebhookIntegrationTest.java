@@ -12,6 +12,7 @@ import java.nio.charset.StandardCharsets;
 import java.util.List;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
 
 /**
  * SPEC-002 R126 — the webhook a bundle-server deployment gets instead of the git one.
@@ -22,9 +23,10 @@ import org.junit.jupiter.api.Test;
  * nothing to match against and every call triggers the check. A rebuild that kept the matching
  * would answer {@code ignored} to every webhook such a deployment sends.
  */
+@ExtendWith(OpalProcessExtension.class)
 public class ApiSourceWebhookIntegrationTest extends TestKitSupport {
 
-  static {
+  static void startProcess() {
     System.setProperty("OPAL_ROLE", "server");
     System.setProperty("OPAL_POLICY_SOURCE_TYPE", "API");
     System.setProperty("OPAL_POLICY_BUNDLE_URL", "http://127.0.0.1:1/bundles");

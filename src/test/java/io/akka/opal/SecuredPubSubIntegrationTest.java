@@ -17,6 +17,7 @@ import org.bouncycastle.util.io.pem.PemObject;
 import org.bouncycastle.util.io.pem.PemWriter;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
 
 /**
  * SPEC-002 R75 — what a websocket without a token gets from a server that requires one.
@@ -30,11 +31,12 @@ import org.junit.jupiter.api.Test;
  * endpoint with no keys configured and gets an answer to every call. A configuration is read once
  * per process here as it is in the original, so the two halves cannot live in one class.
  */
+@ExtendWith(OpalProcessExtension.class)
 public class SecuredPubSubIntegrationTest extends TestKitSupport {
 
-  private static final Path JWKS_DIR;
+  private static Path JWKS_DIR;
 
-  static {
+  static void startProcess() {
     try {
       KeyPairGenerator generator = KeyPairGenerator.getInstance("RSA");
       generator.initialize(2048);

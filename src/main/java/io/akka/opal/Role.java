@@ -38,6 +38,18 @@ public final class Role {
     return answer;
   }
 
+  /**
+   * Re-reads {@code OPAL_ROLE}.
+   *
+   * <p>A deployment's role is fixed for as long as it runs, so nothing in the service calls
+   * this. A harness that runs both roles one after another inside one process does.
+   */
+  public static void refresh() {
+    synchronized (Role.class) {
+      current = read();
+    }
+  }
+
   private static OpalRole read() {
     String value = System.getProperty("OPAL_ROLE", System.getenv("OPAL_ROLE"));
     if (value == null || value.isBlank()) {

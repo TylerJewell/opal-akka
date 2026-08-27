@@ -21,8 +21,15 @@ public final class FetcherRegister {
 
   private static final Logger log = LoggerFactory.getLogger(FetcherRegister.class);
 
+  /** Anything the register itself refuses. The source names this type and callers catch it. */
+  public static class FetcherRegisterException extends RuntimeException {
+    public FetcherRegisterException(String message) {
+      super(message);
+    }
+  }
+
   /** Raised when the register holds nothing under the name an event asked for. */
-  public static final class NoMatchingFetchProviderException extends RuntimeException {
+  public static final class NoMatchingFetchProviderException extends FetcherRegisterException {
     public NoMatchingFetchProviderException(String message) {
       super(message);
     }
@@ -75,12 +82,43 @@ public final class FetcherRegister {
       providers.put(RpcFetchProvider.NAME, RpcFetchProvider::new);
       return;
     }
-    Class<?> found;
+    Class<?> found = null;
     try {
       found = Class.forName(module);
     } catch (ClassNotFoundException e) {
-      throw new IllegalArgumentException("no fetch provider module named " + module, e);
+      // Not a class: the source's entry names a module and registers every provider inside it,
+      // so a name that is not a class is read as the package it looks like.
     }
+    if (found != null) {
+      register(module, found);
+      return;
+    }
+    // R377: every provider in the named package, not one class from it. The source registers
+    // each `BaseFetchProvider` subclass a named module holds, so a deployment shipping three
+    // providers in one module configures one entry and gets three names.
+    List<Class<?>> inPackage = classesIn(module);
+    if (inPackage.isEmpty()) {
+      throw new IllegalArgumentException("no fetch provider module named " + module);
+    }
+    boolean registeredAny = false;
+    for (Class<?> candidate : inPackage) {
+      if (FetchProvider.class.isAssignableFrom(candidate)
+          && !candidate.isInterface()
+          && !java.lang.reflect.Modifier.isAbstract(candidate.getModifiers())) {
+        try {
+          register(module, candidate);
+          registeredAny = true;
+        } catch (RuntimeException e) {
+          log.error("Failed to load FetchingProvider {}: {}", candidate.getName(), e.toString());
+        }
+      }
+    }
+    if (!registeredAny) {
+      throw new IllegalArgumentException(module + " holds no fetch provider");
+    }
+  }
+
+  private void register(String module, Class<?> found) {
     if (!FetchProvider.class.isAssignableFrom(found)) {
       throw new IllegalArgumentException(module + " is not a fetch provider");
     }
@@ -89,7 +127,7 @@ public final class FetcherRegister {
       constructor = found.getConstructor(FetchEvent.class);
     } catch (NoSuchMethodException e) {
       throw new IllegalArgumentException(
-          module + " has no constructor taking a fetch event", e);
+          found.getName() + " has no constructor taking a fetch event", e);
     }
     log.info("Loading FetcherProvider '{}' found at: {}", found.getSimpleName(), module);
     providers.put(
@@ -98,9 +136,78 @@ public final class FetcherRegister {
           try {
             return (FetchProvider) constructor.newInstance(event);
           } catch (ReflectiveOperationException e) {
-            throw new IllegalStateException("could not build " + module, e);
+            throw new IllegalStateException("could not build " + found.getName(), e);
           }
         });
+  }
+
+  /**
+   * Every class the classpath holds directly under one package.
+   *
+   * <p>Read from the class loader's own view rather than from a scanning library: a package is a
+   * directory on disk or an entry prefix inside a jar, and both are reachable through the
+   * resource the loader already resolves for the package's path.
+   */
+  private static List<Class<?>> classesIn(String packageName) {
+    List<Class<?>> found = new java.util.ArrayList<>();
+    String path = packageName.replace('.', '/');
+    ClassLoader loader = Thread.currentThread().getContextClassLoader();
+    if (loader == null) {
+      loader = FetcherRegister.class.getClassLoader();
+    }
+    java.util.Enumeration<java.net.URL> resources;
+    try {
+      resources = loader.getResources(path);
+    } catch (java.io.IOException e) {
+      return found;
+    }
+    while (resources.hasMoreElements()) {
+      java.net.URL resource = resources.nextElement();
+      try {
+        if ("file".equals(resource.getProtocol())) {
+          java.nio.file.Path directory = java.nio.file.Path.of(resource.toURI());
+          try (java.util.stream.Stream<java.nio.file.Path> entries =
+              java.nio.file.Files.list(directory)) {
+            for (java.nio.file.Path entry : entries.toList()) {
+              String name = entry.getFileName().toString();
+              if (name.endsWith(".class") && !name.contains("$")) {
+                addClass(found, loader, packageName + "." + name.substring(0, name.length() - 6));
+              }
+            }
+          }
+        } else if ("jar".equals(resource.getProtocol())) {
+          String file = resource.getPath();
+          String jarPath = file.substring(5, file.indexOf('!'));
+          try (java.util.jar.JarFile jar =
+              new java.util.jar.JarFile(java.net.URLDecoder.decode(jarPath, "UTF-8"))) {
+            java.util.Enumeration<java.util.jar.JarEntry> entries = jar.entries();
+            while (entries.hasMoreElements()) {
+              String name = entries.nextElement().getName();
+              if (name.startsWith(path + "/")
+                  && name.endsWith(".class")
+                  && !name.contains("$")
+                  && name.indexOf('/', path.length() + 1) < 0) {
+                addClass(
+                    found,
+                    loader,
+                    name.substring(0, name.length() - 6).replace('/', '.'));
+              }
+            }
+          }
+        }
+      } catch (Exception e) {
+        log.debug("could not read {} for providers: {}", resource, e.toString());
+      }
+    }
+    return found;
+  }
+
+  private static void addClass(List<Class<?>> found, ClassLoader loader, String name) {
+    try {
+      found.add(Class.forName(name, false, loader));
+    } catch (Throwable e) {
+      // A class the loader cannot initialise is not a provider anybody could have used.
+    }
   }
 
   /**

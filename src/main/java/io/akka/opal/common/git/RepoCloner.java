@@ -49,6 +49,12 @@ public final class RepoCloner {
   private final int cloneTimeoutSeconds;
 
   public RepoCloner(String url, String path, String branchName, String sshKey, int cloneTimeout) {
+    // R283: refused where it is given rather than where it is used. A cloner with no url is a
+    // misconfiguration, and the failure belongs at start-up where an operator sees it, not on
+    // the first poll where it looks like a network fault.
+    if (url == null || url.isEmpty()) {
+      throw new IllegalArgumentException("must provide repo url!");
+    }
     this.url = url;
     this.path = Path.of(expandUser(path));
     this.branchName = branchName;
@@ -167,7 +173,9 @@ public final class RepoCloner {
    * jgit use it without changing the process's own SSH configuration.
    */
   public void applyTransport(java.util.function.Consumer<TransportConfigCallback> setter) {
-    if (sshKey == null || sshKey.isEmpty()) {
+    // R273: the key is for ssh, and a url that is not an ssh url never sees it — the source
+    // returns an empty environment before it writes anything to disk.
+    if (sshKey == null || sshKey.isEmpty() || !isSshRepoUrl(url)) {
       return;
     }
     Path keyFile = writeKeyFile();
@@ -176,11 +184,14 @@ public final class RepoCloner {
           @Override
           protected void configure(OpenSshConfig.Host host, com.jcraft.jsch.Session session) {
             session.setConfig("StrictHostKeyChecking", "no");
+            // R274: IdentitiesOnly, so the agent's other keys are not offered first to a host
+            // that counts failed attempts.
+            session.setConfig("IdentitiesOnly", "yes");
           }
 
           @Override
           protected com.jcraft.jsch.JSch createDefaultJSch(FS fs) throws com.jcraft.jsch.JSchException {
-            com.jcraft.jsch.JSch jsch = super.createDefaultJSch(fs);
+            com.jcraft.jsch.JSch jsch = new com.jcraft.jsch.JSch();
             jsch.addIdentity(keyFile.toString());
             return jsch;
           }
@@ -191,6 +202,11 @@ public final class RepoCloner {
             ssh.setSshSessionFactory(factory);
           }
         });
+  }
+
+  /** An ssh url is {@code ssh://...} or {@code git@...}, which is the source's own test. */
+  public static boolean isSshRepoUrl(String repoUrl) {
+    return repoUrl != null && (repoUrl.startsWith("ssh://") || repoUrl.startsWith("git@"));
   }
 
   /**

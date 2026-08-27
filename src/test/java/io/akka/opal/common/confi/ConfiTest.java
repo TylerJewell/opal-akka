@@ -128,8 +128,8 @@ class ConfiTest {
   @Test
   void anSshPublicKeyIsTakenVerbatim() {
     String key = "ssh-rsa AAAAB3Nza_C1yc2E comment";
-    assertEquals(key, Keys.decode(key, "ssh"));
-    assertTrue(Keys.decode("no_newlines_here", "pem").endsWith("\n"));
+    assertEquals(key, Keys.decode(key, "ssh", true));
+    assertTrue(Keys.decode("no_newlines_here", "pem", false).endsWith("\n"));
   }
 
   /** R11: the option name is the key lowercased with hyphens, and a value applies over the env. */

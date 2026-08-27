@@ -102,8 +102,7 @@ public class ServerRootEndpoint extends AbstractHttpEndpoint {
       }
       if (!server.loadLimiter().allow()) {
         return Responses.detail(
-            StatusCodes.TOO_MANY_REQUESTS,
-            "Rate limit exceeded: " + server.config().getString("CLIENT_LOAD_LIMIT_NOTATION"));
+            StatusCodes.TOO_MANY_REQUESTS, server.loadLimiter().canonicalNotation());
       }
       return Responses.json(StatusCodes.OK, null);
     });

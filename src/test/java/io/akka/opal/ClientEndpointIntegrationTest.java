@@ -16,6 +16,7 @@ import org.junit.jupiter.api.MethodOrderer;
 import org.junit.jupiter.api.Order;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestMethodOrder;
+import org.junit.jupiter.api.extension.ExtendWith;
 
 /**
  * The client's own routes, over real HTTP — SPEC-002 R91, R97, R98 and R99.
@@ -28,9 +29,10 @@ import org.junit.jupiter.api.TestMethodOrder;
  * rule tested here is about the client's own surface rather than about an engine.
  */
 @TestMethodOrder(MethodOrderer.OrderAnnotation.class)
+@ExtendWith(OpalProcessExtension.class)
 public class ClientEndpointIntegrationTest extends TestKitSupport {
 
-  static {
+  static void startProcess() {
     System.setProperty("OPAL_ROLE", "client");
     System.setProperty("OPAL_POLICY_STORE_TYPE", "MOCK");
     System.setProperty("OPAL_INLINE_OPA_ENABLED", "false");
@@ -95,7 +97,13 @@ public class ClientEndpointIntegrationTest extends TestKitSupport {
     JsonNode actual = body(response);
     assertEquals(expected.get("auth_type").asText(), actual.get("auth_type").asText());
     assertNotNull(actual.get("url"));
-    assertEquals("MOCK", actual.get("type").asText(), "this run uses the in-memory store");
+    // R292: `OPA` whatever store this client has. The field is the schema's own default and the
+    // route never fills it in, which is what the recorded answer shows — this run uses the
+    // in-memory store and the original said `OPA` for it too.
+    assertEquals(
+        expected.get("type").asText(),
+        actual.get("type").asText(),
+        "the field is a constant, not the configured store");
   }
 
   /** R97: registering, reading back, listing and removing a callback. */

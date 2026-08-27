@@ -36,7 +36,27 @@ public interface PolicyStoreClient {
 
   JsonNode getData(String path);
 
-  JsonNode getDataWithInput(String path, JsonNode input);
+  /**
+   * R370: a document evaluated against an input, with the engine's own answer proxied back.
+   *
+   * <p>The status and the headers are part of the answer and not packaging around it: a query
+   * that names a document the engine does not have answers 200 with an empty body, and one whose
+   * input will not parse answers 400 with a body that says which field. A caller handed only the
+   * parsed body cannot tell those apart.
+   */
+  Proxied getDataWithInput(String path, JsonNode input);
+
+  /** What the engine answered, as it answered it. */
+  record Proxied(int status, java.util.Map<String, String> headers, String body) {
+
+    public JsonNode json() {
+      try {
+        return io.akka.opal.server.pubsub.Rpc.MAPPER.readTree(body);
+      } catch (Exception e) {
+        return io.akka.opal.server.pubsub.Rpc.MAPPER.createObjectNode();
+      }
+    }
+  }
 
   void initHealthcheckPolicy(String policyId, String policyCode);
 

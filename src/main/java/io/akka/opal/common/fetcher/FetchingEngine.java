@@ -6,7 +6,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
-import java.util.concurrent.ArrayBlockingQueue;
+import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
@@ -34,7 +34,11 @@ public final class FetchingEngine implements AutoCloseable {
   private record Queued(FetchEvent event, Consumer<JsonNode> callback) {}
 
   private final FetcherRegister register;
-  private final BlockingQueue<Queued> queue = new ArrayBlockingQueue<>(1024);
+  /**
+   * Unbounded, because the source's is. A cap would refuse a data update carrying more entries
+   * than the cap allows, which is a limit the source does not have and a caller could hit.
+   */
+  private final BlockingQueue<Queued> queue = new LinkedBlockingQueue<>();
   private final List<Thread> workers = new ArrayList<>();
   private final List<BiConsumer<Exception, FetchEvent>> failureHandlers = new ArrayList<>();
   private final int workerCount;
@@ -131,7 +135,15 @@ public final class FetchingEngine implements AutoCloseable {
                 ? defaultRetry
                 : Retries.Config.from(queued.event().retry());
         try (FetchProvider opened = provider.open()) {
-          data = opened.process(Retries.call(policy, opened::fetch, sleeper));
+          Object fetched = Retries.call(policy, opened::fetch, sleeper);
+          try {
+            data = opened.process(fetched);
+          } catch (Exception e) {
+            // The source names the stage: a provider that fetched and could not make sense of
+            // what came back is a different fault from one that could not fetch.
+            log.error("Failed to process fetched data", e);
+            throw e;
+          }
         }
         try {
           queued.callback().accept(data);
@@ -173,6 +185,14 @@ public final class FetchingEngine implements AutoCloseable {
   public FetchEvent queueFetchEvent(FetchEvent event, Consumer<JsonNode> callback) {
     startWorkers();
     event.setId(UUID.randomUUID().toString().replace("-", ""));
+    // R272: an absent timeout means do not wait at all — the source picks its no-wait put in
+    // that case, and on an unbounded queue neither ever blocks.
+    if (enqueueTimeoutSeconds <= 0) {
+      if (!queue.offer(new Queued(event, callback))) {
+        throw new IllegalStateException("fetch queue is full");
+      }
+      return event;
+    }
     try {
       if (!queue.offer(new Queued(event, callback), enqueueTimeoutSeconds, TimeUnit.SECONDS)) {
         throw new IllegalStateException("fetch queue is full");

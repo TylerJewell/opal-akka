@@ -84,18 +84,83 @@ public final class Keys {
     if (key instanceof ECPublicKey ec) {
       return new ECKey.Builder(Curve.forECParameterSpec(ec.getParams()), ec).build();
     }
+    if ("Ed25519".equalsIgnoreCase(key.getAlgorithm())
+        || "EdDSA".equalsIgnoreCase(key.getAlgorithm())) {
+      try {
+        org.bouncycastle.crypto.params.Ed25519PublicKeyParameters parameters =
+            (org.bouncycastle.crypto.params.Ed25519PublicKeyParameters)
+                org.bouncycastle.crypto.util.PublicKeyFactory.createKey(key.getEncoded());
+        return new com.nimbusds.jose.jwk.OctetKeyPair.Builder(
+                Curve.Ed25519,
+                com.nimbusds.jose.util.Base64URL.encode(parameters.getEncoded()))
+            .build();
+      } catch (Exception e) {
+        throw new IllegalArgumentException("could not read an Ed25519 public key", e);
+      }
+    }
     throw new IllegalArgumentException("unsupported public key type: " + key.getAlgorithm());
   }
 
+  /**
+   * R376: a private key of any of the three families OPAL can sign with becomes a key it signs
+   * with, on its own.
+   *
+   * <p>The public half is derived rather than asked for. `AUTH_JWT_ALGORITHM` offers ES256 and
+   * EdDSA beside the RSA family, and a deployment that names one of those has one private key to
+   * configure — refusing it because the public half is not in the same string makes those
+   * algorithms unusable while still listing them.
+   */
   private static JWK toJwk(PrivateKey key, JWTAlgorithm algorithm) {
     if (key instanceof RSAPrivateKey rsa) {
       return new RSAKey.Builder(rsaPublicFrom(rsa)).privateKey(rsa).build();
     }
     if (key instanceof ECPrivateKey ec) {
-      throw new IllegalArgumentException(
-          "an EC private key must be supplied with its public half; use PEM or SSH format");
+      return new ECKey.Builder(Curve.forECParameterSpec(ec.getParams()), ecPublicFrom(ec))
+          .privateKey(ec)
+          .build();
+    }
+    if ("Ed25519".equalsIgnoreCase(key.getAlgorithm())
+        || "EdDSA".equalsIgnoreCase(key.getAlgorithm())) {
+      return ed25519From(key);
     }
     throw new IllegalArgumentException("unsupported private key type: " + key.getAlgorithm());
+  }
+
+  /** The public point is the generator multiplied by the private scalar. */
+  private static java.security.interfaces.ECPublicKey ecPublicFrom(ECPrivateKey key) {
+    try {
+      org.bouncycastle.crypto.params.ECPrivateKeyParameters parameters =
+          (org.bouncycastle.crypto.params.ECPrivateKeyParameters)
+              org.bouncycastle.crypto.util.PrivateKeyFactory.createKey(key.getEncoded());
+      org.bouncycastle.math.ec.ECPoint point =
+          new org.bouncycastle.math.ec.FixedPointCombMultiplier()
+              .multiply(parameters.getParameters().getG(), parameters.getD())
+              .normalize();
+      java.security.spec.ECPoint w =
+          new java.security.spec.ECPoint(
+              point.getAffineXCoord().toBigInteger(), point.getAffineYCoord().toBigInteger());
+      return (java.security.interfaces.ECPublicKey)
+          KeyFactory.getInstance("EC", "BC")
+              .generatePublic(new java.security.spec.ECPublicKeySpec(w, key.getParams()));
+    } catch (Exception e) {
+      throw new IllegalArgumentException("could not derive the public half of an EC key", e);
+    }
+  }
+
+  private static JWK ed25519From(PrivateKey key) {
+    try {
+      org.bouncycastle.crypto.params.Ed25519PrivateKeyParameters parameters =
+          (org.bouncycastle.crypto.params.Ed25519PrivateKeyParameters)
+              org.bouncycastle.crypto.util.PrivateKeyFactory.createKey(key.getEncoded());
+      return new com.nimbusds.jose.jwk.OctetKeyPair.Builder(
+              Curve.Ed25519,
+              com.nimbusds.jose.util.Base64URL.encode(
+                  parameters.generatePublicKey().getEncoded()))
+          .d(com.nimbusds.jose.util.Base64URL.encode(parameters.getEncoded()))
+          .build();
+    } catch (Exception e) {
+      throw new IllegalArgumentException("could not read an Ed25519 private key", e);
+    }
   }
 
   private static RSAPublicKey rsaPublicFrom(RSAPrivateKey key) {

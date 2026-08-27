@@ -15,6 +15,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
 
 /**
  * {@code GET /policy} against a real repository, compared with what the original served from the
@@ -24,12 +25,13 @@ import org.junit.jupiter.api.Test;
  * service starts before any {@code @BeforeAll} of this class runs and it reads its configuration
  * once at start-up, exactly as the original does.
  */
+@ExtendWith(OpalProcessExtension.class)
 public class BundleEndpointIntegrationTest extends TestKitSupport {
 
-  private static final ProbeRepository REPO;
-  private static final Path CLONE;
+  private static ProbeRepository REPO;
+  private static Path CLONE;
 
-  static {
+  static void startProcess() {
     try {
       REPO = new ProbeRepository();
       CLONE = Files.createTempDirectory("opal-bundle-clone-");
@@ -52,6 +54,30 @@ public class BundleEndpointIntegrationTest extends TestKitSupport {
     System.clearProperty("OPAL_POLICY_REPO_MAIN_BRANCH");
     System.clearProperty("OPAL_POLICY_REPO_CLONE_PATH");
     System.clearProperty("OPAL_POLICY_REPO_WEBHOOK_SECRET");
+  }
+
+  /**
+   * Waits for the first clone before asserting on what the route answers.
+   *
+   * <p>{@code 503 policy repo was not found} is the right answer while the watcher's first clone
+   * is still running, and every rule here is about what the route answers once it is there. A
+   * test that begins asserting the moment the runtime is up is timing the clone.
+   */
+  @org.junit.jupiter.api.BeforeEach
+  public void waitForTheFirstClone() {
+    long deadline = System.nanoTime() + java.time.Duration.ofSeconds(30).toNanos();
+    while (System.nanoTime() < deadline) {
+      if (httpClient.GET("/policy").invoke().status().intValue() == 200) {
+        return;
+      }
+      try {
+        Thread.sleep(100);
+      } catch (InterruptedException e) {
+        Thread.currentThread().interrupt();
+        return;
+      }
+    }
+    throw new IllegalStateException("the policy repository was never cloned");
   }
 
   private static JsonNode recorded(String key) {

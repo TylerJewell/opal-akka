@@ -124,6 +124,12 @@ public final class ClientRuntime implements AutoCloseable {
             common.get("AUTH_JWT_ALGORITHM"),
             common.getString("AUTH_JWT_AUDIENCE"),
             common.getString("AUTH_JWT_ISSUER"));
+    // R355: a client with no public key accepts every token it is shown. That is a deployment
+    // choice and not a fault, and it is the one condition an operator reading a log has no other
+    // way to see.
+    if (!verifier.enabled()) {
+      log.info("API authentication disabled (public encryption key was not provided)");
+    }
 
     Data.UpdateCallback defaultCallbacks = config.get("DEFAULT_UPDATE_CALLBACKS");
     this.callbacksRegister =
@@ -141,7 +147,8 @@ public final class ClientRuntime implements AutoCloseable {
                 (Integer) common.get("FETCHING_CALLBACK_TIMEOUT"),
                 (Integer) common.get("FETCHING_ENQUEUE_TIMEOUT"))
                 .withDefaultRetry(retryPolicy(config.get("DATA_UPDATER_CONN_RETRY"))))
-            .withDefaultDataUrl(config.getString("DEFAULT_DATA_URL"));
+            .withDefaultDataUrl(config.getString("DEFAULT_DATA_URL"))
+            .withToken(config.getString("CLIENT_TOKEN"));
     this.callbacksReporter = new CallbacksReporter(callbacksRegister, dataFetcher);
 
     this.dataTopics = scopedDataTopics();
@@ -251,35 +258,115 @@ public final class ClientRuntime implements AutoCloseable {
       waitForServerLoadLimit();
     }
     startEngineIfInline();
+    // R344: the healthcheck policy is written into the engine before a backup is restored over
+    // it, and a failure to write it ends the process. A client whose engine cannot answer the
+    // health rule reports itself healthy on a rule that is not there.
+    try {
+      maybeInitHealthcheckPolicy();
+    } catch (RuntimeException e) {
+      log.error("healthcheck policy enabled but could not be initialized!", e);
+      triggerShutdown();
+      return;
+    }
+    startLivenessProbe();
     if (offlineModeEnabled) {
       loadStoreFromBackup();
       startPeriodicBackup();
+      if (connectivityDisabled) {
+        if (backupLoaded) {
+          // R345: a client told not to reach the server, holding a store it restored itself, is
+          // told so plainly. Nothing after this point runs: there is no server to subscribe to.
+          log.warn(
+              "Offline mode: OPAL server connectivity disabled and backup loaded, the client"
+                  + " will not receive any updates and is in complete isolated mode");
+          return;
+        }
+        // R247: offline with nothing to be offline from is worse than being online. A client
+        // that could not load a backup has an empty store and no way to fill it, so it connects
+        // after all.
+        log.warn(
+            "Offline mode: OPAL server connectivity disabled but a valid backup could not be"
+                + " loaded, falling back to server connection");
+        connectivityDisabled = false;
+      }
     }
-    // R247: offline with nothing to be offline from is worse than being online. A client that
-    // could not load a backup has an empty store and no way to fill it, so it connects after all.
-    if (connectivityDisabled && !backupLoaded) {
-      log.warn(
-          "OPAL server connectivity is disabled but no backup could be loaded; "
-              + "falling back to server connection");
-      connectivityDisabled = false;
+    startUpdatersOrShutDown();
+  }
+
+  /**
+   * R346: the updaters, and an end to the process if they will not start.
+   *
+   * <p>A client whose subscriptions never came up receives nothing and answers every question
+   * from whatever its store happened to hold — which is indistinguishable, from outside, from a
+   * fleet nobody is publishing to.
+   */
+  private void startUpdatersOrShutDown() {
+    if (connectivityDisabled) {
+      log.debug("skipping the updaters because OPAL server connectivity is disabled");
+      return;
     }
-    maybeInitHealthcheckPolicy();
-    startLivenessProbe();
-    if (!connectivityDisabled) {
+    try {
       startUpdaters();
+    } catch (RuntimeException e) {
+      log.error("Failed to launch background task", e);
+      triggerShutdown();
     }
   }
 
-  /** R95: {@code GET /loadlimit} until it answers 200, with random exponential backoff. */
+  /**
+   * Ends this process so whatever supervises it starts another.
+   *
+   * <p>The source sends itself a termination signal, which runs its own shutdown lifecycle; this
+   * exits rather than halting for the same reason — the shutdown hooks are what write the backup
+   * and stop the engine.
+   */
+  void triggerShutdown() {
+    if (shutdownTrigger != null) {
+      shutdownTrigger.run();
+      return;
+    }
+    new Thread(
+            () -> {
+              try {
+                Thread.sleep(500);
+              } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+              }
+              System.exit(1);
+            },
+            "opal-client-shutdown")
+        .start();
+  }
+
+  /** What ending the process means, so a test can watch for it without ending the test's own. */
+  private volatile Runnable shutdownTrigger;
+
+  void onShutdownRequested(Runnable trigger) {
+    this.shutdownTrigger = trigger;
+  }
+
+  /**
+   * R95: {@code GET /loadlimit} until it answers 200, with random exponential backoff.
+   *
+   * <p>R353: the wait is a fixed policy — random exponential to a ten-second ceiling, never
+   * giving up — rather than the client's configured connection retry. The two are different
+   * questions: the retry settings say how hard to try a server that is answering, and this one
+   * says how long to queue behind one that is telling every client to come back later.
+   */
+  static final int LOAD_LIMIT_MAX_WAIT_SECONDS = 10;
+
   void waitForServerLoadLimit() {
     String url = config.getString("SERVER_URL") + "/loadlimit";
-    ConnRetryOptions retry = config.get("POLICY_UPDATER_CONN_RETRY");
     for (int attempt = 1; ; attempt++) {
       try {
+        log.info("Trying to get server's load limit pass");
         // R250: the route is behind the same authenticator as every other server route, so a
         // probe with no token gets a 401 for ever and the client never starts.
         HttpRequest.Builder request =
             HttpRequest.newBuilder(URI.create(url)).timeout(Duration.ofSeconds(10)).GET();
+        // R354: the source sends a content-type on a request with no body. A deployment with a
+        // proxy or a gateway that keys on it sees the same request from both.
+        request.header("content-type", "text/plain");
         String token = config.getString("CLIENT_TOKEN");
         if (token != null && !token.isEmpty()) {
           request.header("Authorization", "Bearer " + token);
@@ -290,12 +377,19 @@ public final class ClientRuntime implements AutoCloseable {
         if (response.statusCode() == 200) {
           return;
         }
-        log.info("waiting on server load limit, got {}", response.statusCode());
+        log.warn("loadlimit endpoint returned status {}", response.statusCode());
       } catch (Exception e) {
-        log.info("waiting on server load limit: {}", e.toString());
+        log.warn("server connection error: {}", e.toString());
       }
       try {
-        Thread.sleep(retry.waitMillis(Math.min(attempt, 10), ThreadLocalRandom.current()));
+        // Random exponential: the whole point is that a fleet arriving together does not come
+        // back together, and the ceiling keeps a long queue from becoming an unbounded one.
+        long ceiling =
+            Math.min(
+                LOAD_LIMIT_MAX_WAIT_SECONDS * 1000L,
+                (long) Math.min(Math.pow(2, Math.min(attempt, 20)), LOAD_LIMIT_MAX_WAIT_SECONDS)
+                    * 1000L);
+        Thread.sleep(ThreadLocalRandom.current().nextLong(Math.max(1, ceiling)));
       } catch (InterruptedException e) {
         Thread.currentThread().interrupt();
         return;
@@ -360,6 +454,19 @@ public final class ClientRuntime implements AutoCloseable {
   }
 
   void startLivenessProbe() {
+    try {
+      startLivenessProbeOrThrow();
+    } catch (RuntimeException e) {
+      // R347: not fatal, and not silent either. Without the probe, `/healthy` falls back to the
+      // transaction-only signal and reports an engine nobody can reach as reachable.
+      log.error(
+          "Policy store liveness probe failed to start; /healthy will not reflect engine"
+              + " reachability.",
+          e);
+    }
+  }
+
+  private void startLivenessProbeOrThrow() {
     if (!Boolean.TRUE.equals(config.get("POLICY_STORE_LIVENESS_PROBE_ENABLED"))) {
       log.info("policy store liveness probe disabled via POLICY_STORE_LIVENESS_PROBE_ENABLED");
       return;
@@ -391,22 +498,43 @@ public final class ClientRuntime implements AutoCloseable {
     }
   }
 
-  /** R90: the transaction log becomes a policy inside the engine, when asked for. */
+  /**
+   * R90 and R348: the transaction log becomes a policy inside the engine, when asked for.
+   *
+   * <p>Three ways this fails and each says which: the policy is not where the configuration says
+   * it is, it is there and cannot be read, or the engine would not take it. They call for
+   * different repairs — an image without the file, a permission, and an engine that is not up —
+   * and one message for all three sends an operator to the wrong one.
+   */
   void maybeInitHealthcheckPolicy() {
     if (!Boolean.TRUE.equals(config.get("OPA_HEALTH_CHECK_POLICY_ENABLED"))) {
       return;
     }
+    String template;
+    String path = ClientConfig.OPA_HEALTH_CHECK_POLICY_PATH;
+    if (ClientRuntime.class.getResource("/" + path) == null) {
+      log.error("Critical: OPA health-check policy is enabled, but cannot find policy at {}", path);
+      throw new IllegalStateException("OPA health check policy not found!");
+    }
     try {
-      String template = healthcheckPolicyTemplate();
-      store.initHealthcheckPolicy(ClientConfig.OPA_HEALTH_CHECK_POLICY_PATH, template);
-    } catch (Exception e) {
-      log.error("healthcheck policy enabled but could not be initialized!", e);
+      template = healthcheckPolicyTemplate();
+    } catch (RuntimeException e) {
+      log.error("Critical: Cannot read healthcheck policy: {}", e.toString());
+      throw e;
+    }
+    try {
+      store.initHealthcheckPolicy(path, template);
+    } catch (RuntimeException e) {
+      log.error(
+          "Failed to connect to OPA agent while init healthcheck policy -- {}", e.toString());
+      throw e;
     }
   }
 
   static String healthcheckPolicyTemplate() {
     try (var in =
-        ClientRuntime.class.getResourceAsStream("/engine/healthcheck/opal.rego")) {
+        ClientRuntime.class.getResourceAsStream(
+            "/" + ClientConfig.OPA_HEALTH_CHECK_POLICY_PATH)) {
       return new String(in.readAllBytes(), StandardCharsets.UTF_8);
     } catch (Exception e) {
       throw new IllegalStateException("could not read the healthcheck policy template", e);
@@ -464,7 +592,10 @@ public final class ClientRuntime implements AutoCloseable {
     if (!Boolean.TRUE.equals(common.get("STATISTICS_ENABLED"))) {
       return;
     }
-    client.waitUntilReady(Duration.ofSeconds(5));
+    // R356: waits for the subscription rather than for five seconds. A statistics message sent
+    // before the channel is subscribed is not delivered anywhere, and a client that took longer
+    // than the bound to connect would be missing from the fleet's picture for as long as it ran.
+    client.waitUntilReady(null);
     Map<String, Object> message = new LinkedHashMap<>();
     message.put("topics", topics);
     message.put("client_id", opalClientId);
@@ -479,7 +610,7 @@ public final class ClientRuntime implements AutoCloseable {
     }
     try {
       policyUpdater.onPolicyUpdateMessage(
-          Rpc.MAPPER.treeToValue(data, Policy.PolicyUpdateMessage.class));
+          topic, Rpc.MAPPER.treeToValue(data, Policy.PolicyUpdateMessage.class));
     } catch (Exception e) {
       log.warn("Got invalid policy update message from server: {}", e.toString());
     }
@@ -490,8 +621,13 @@ public final class ClientRuntime implements AutoCloseable {
       log.warn("got data update message without data, skipping data update!");
       return;
     }
+    // R341: why this update arrived, before anything is fetched. Every later line in the update
+    // names the entry rather than the cause, so without this a log of a busy client says what was
+    // read and never says what asked for it.
+    JsonNode reason = data.get("reason");
+    log.info("Updating policy data, reason: {}", reason == null ? "" : reason.asText(""));
     try {
-      dataUpdater.updatePolicyData(withId(Rpc.MAPPER.treeToValue(data, Data.DataUpdate.class)));
+      dataUpdater.triggerDataUpdate(withId(Rpc.MAPPER.treeToValue(data, Data.DataUpdate.class)));
     } catch (Exception e) {
       log.warn("Got invalid data update message from server: {}", e.toString());
     }
@@ -540,6 +676,12 @@ public final class ClientRuntime implements AutoCloseable {
         scopeId == null || scopeId.isEmpty() || "default".equals(scopeId)
             ? config.getString("DEFAULT_DATA_SOURCES_CONFIG_URL")
             : config.getString("SERVER_URL") + "/scopes/" + scopeId + "/data";
+    // R342: which address this configuration came from, redacted. A client reading the wrong one
+    // — the server-wide set instead of its scope's — behaves exactly like one whose scope holds
+    // the wrong entries, and nothing else in the log tells the two apart.
+    log.info(
+        "Getting data-sources configuration from '{}'",
+        io.akka.opal.common.util.Urls.redactUrl(url));
     HttpRequest.Builder request =
         HttpRequest.newBuilder(URI.create(url)).timeout(Duration.ofSeconds(30)).GET();
     String token = config.getString("CLIENT_TOKEN");
@@ -550,8 +692,13 @@ public final class ClientRuntime implements AutoCloseable {
         io.akka.opal.common.util.Http.forClient()
             .send(request.build(), HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
     if (response.statusCode() != 200) {
+      // R343: the server's own error body, not only the code it came with. A 422 whose body names
+      // the field that would not validate is the whole of the answer.
       throw new IllegalStateException(
-          "could not read the data sources config: " + response.statusCode());
+          "Fetch data sources failed with status code "
+              + response.statusCode()
+              + ", error: "
+              + response.body());
     }
     return Rpc.MAPPER.readValue(response.body(), Data.DataSourceConfig.class);
   }
@@ -621,11 +768,22 @@ public final class ClientRuntime implements AutoCloseable {
     }
     log.warn("Disabling OPAL server connectivity at runtime");
     connectivityDisabled = true;
+    // R350: an enable that has not finished is cancelled here. Otherwise it lands after the
+    // disable and leaves a client that was told to go quiet with live subscriptions.
+    cancelPendingEnable();
     stopUpdaters();
     if (offlineModeEnabled) {
       backupStore();
     }
     return true;
+  }
+
+  private void cancelPendingEnable() {
+    java.util.concurrent.Future<?> pending = pendingEnable;
+    if (pending != null && !pending.isDone()) {
+      pending.cancel(true);
+    }
+    pendingEnable = null;
   }
 
   /**
@@ -641,14 +799,57 @@ public final class ClientRuntime implements AutoCloseable {
     }
     log.warn("Enabling OPAL server connectivity at runtime");
     connectivityDisabled = false;
-    try {
-      startUpdaters();
-    } catch (RuntimeException e) {
-      log.error("Runtime enable failed, reverting to disconnected state", e);
-      connectivityDisabled = true;
-      return false;
-    }
+    cancelPendingEnable();
+    // R349: the answer is "enabled", and the subscriptions come up behind it. A route that waited
+    // for two websocket handshakes and a full bundle before answering is a route a caller times
+    // out on, and the revert below is what makes the honest answer available afterwards.
+    pendingEnable =
+        enableExecutor()
+            .submit(
+                () -> {
+                  try {
+                    startUpdaters();
+                  } catch (RuntimeException e) {
+                    log.error("Runtime enable failed, reverting to disconnected state", e);
+                    synchronized (ClientRuntime.this) {
+                      connectivityDisabled = true;
+                    }
+                  }
+                });
     return true;
+  }
+
+  /** The enable in flight, so a disable arriving behind it can take it back. */
+  private volatile java.util.concurrent.Future<?> pendingEnable;
+
+  private ScheduledExecutorService enableScheduler;
+
+  private synchronized ScheduledExecutorService enableExecutor() {
+    if (enableScheduler == null) {
+      enableScheduler =
+          Executors.newSingleThreadScheduledExecutor(
+              runnable -> {
+                Thread thread = new Thread(runnable, "opal-client-enable");
+                thread.setDaemon(true);
+                return thread;
+              });
+    }
+    return enableScheduler;
+  }
+
+  /** Waits for an enable started at runtime, which is what a test asserting on its effect needs. */
+  void awaitPendingEnable(Duration timeout) {
+    java.util.concurrent.Future<?> pending = pendingEnable;
+    if (pending == null) {
+      return;
+    }
+    try {
+      pending.get(timeout.toMillis(), TimeUnit.MILLISECONDS);
+    } catch (InterruptedException e) {
+      Thread.currentThread().interrupt();
+    } catch (Exception e) {
+      // Already reported by the task itself.
+    }
   }
 
   public synchronized void stopUpdaters() {
@@ -681,13 +882,27 @@ public final class ClientRuntime implements AutoCloseable {
     return backupLoaded || store.isReady();
   }
 
+  /**
+   * R351: whether the store is answering, which is what {@code online} on the health route means.
+   *
+   * <p>Not whether this client is allowed to talk to the server. The source answers
+   * {@code online: true} whenever the store is healthy and {@code false} only on the offline
+   * branch it reaches when the store is not — so a client with connectivity turned off and a
+   * healthy store is online, and one that cannot reach its engine is not, whatever it is allowed
+   * to do.
+   */
   public boolean online() {
-    return !connectivityDisabled;
+    return store.isHealthy();
   }
 
   @Override
   public void close() {
     stopUpdaters();
+    cancelPendingEnable();
+    if (enableScheduler != null) {
+      enableScheduler.shutdownNow();
+      enableScheduler = null;
+    }
     if (backupTask != null) {
       backupTask.cancel(true);
     }
@@ -697,8 +912,14 @@ public final class ClientRuntime implements AutoCloseable {
     if (offlineModeEnabled) {
       backupStore();
     }
-    if (livenessProbe != null) {
-      livenessProbe.close();
+    // R352: the engine is stopped whatever the probe did. A probe whose close throws would
+    // otherwise leave a policy engine running as a child of a process that has gone.
+    try {
+      if (livenessProbe != null) {
+        livenessProbe.close();
+      }
+    } catch (RuntimeException e) {
+      log.error("error while stopping policy store liveness probe", e);
     }
     if (engineRunner != null) {
       engineRunner.close();
@@ -712,7 +933,11 @@ public final class ClientRuntime implements AutoCloseable {
     details.put("token", tokenIfNotExcluded());
     details.put("auth_type", ((io.akka.opal.common.config.Enums.PolicyStoreAuth)
         config.get("POLICY_STORE_AUTH_TYPE")).wire());
-    details.put("type", ((PolicyStoreTypes) config.get("POLICY_STORE_TYPE")).wire());
+    // R292: always OPA. The field is the schema's own default and the route never fills it in,
+    // so a Cedar deployment answers `OPA` here too — a caller branching on it is branching on a
+    // constant, and reporting the configured store instead would tell it something the original
+    // never says.
+    details.put("type", PolicyStoreTypes.OPA.wire());
     // R256: the three fields an OAuth-authenticated store needs, with the secret held back on the
     // same terms as the bearer token — a caller reading this is being told where the store is and
     // how to talk to it, and the secret is the one part of that a log should never carry.

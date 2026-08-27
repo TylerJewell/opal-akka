@@ -110,6 +110,7 @@ public final class GitPolicyFetcher {
    *     the repair
    */
   public void fetch(boolean forceFetch, boolean honorBackoff) {
+    this.honorBackoffUnderLock = honorBackoff;
     if (honorBackoff && GitOps.inBackoff(sourceId)) {
       GitOps.skipped("backoff");
       log.debug(
@@ -152,13 +153,46 @@ public final class GitPolicyFetcher {
     fetch(forceFetch, true);
   }
 
+  /** R396: what the pre-lock check decided, so the second look under the lock matches it. */
+  private volatile boolean honorBackoffUnderLock;
+
+
   private boolean cloneExists() {
     return Files.isDirectory(clonePath().resolve(".git"));
+  }
+
+  /**
+   * R395: asked, under the lock, whether this scope still wants this source.
+   *
+   * <p>Answering false means the scope was deleted or repointed while this attempt was queued,
+   * and cloning then leaves a directory nothing later names.
+   */
+  private volatile java.util.function.BooleanSupplier livenessProbe;
+
+  public void setLivenessProbe(java.util.function.BooleanSupplier probe) {
+    this.livenessProbe = probe;
   }
 
   private void doFetch(boolean forceFetch) {
     Object lock = REPO_LOCKS.computeIfAbsent(clonePath().toString(), ignored -> new Object());
     synchronized (lock) {
+      // R396: the backoff is looked at again here. Several syncs of one source can all pass the
+      // check before the first of them has failed and recorded, and without this second look
+      // each performs its own full attempt against a remote that is already known to be down.
+      if (honorBackoffUnderLock && GitOps.inBackoff(sourceId)) {
+        GitOps.skipped("backoff");
+        log.debug(
+            "Skipping sync for {}: in backoff for another {}s after {} consecutive failures",
+            Urls.redactUrl(source.url()),
+            Math.round(GitOps.secondsUntilRetry(sourceId)),
+            GitOps.consecutiveFailures(sourceId));
+        return;
+      }
+      java.util.function.BooleanSupplier probe = livenessProbe;
+      if (probe != null && !probe.getAsBoolean()) {
+        log.info("Skipping sync for {}: the scope no longer names this source", sourceId);
+        return;
+      }
       Path path = clonePath();
       try {
         Files.createDirectories(baseDir);
@@ -166,7 +200,7 @@ public final class GitPolicyFetcher {
           // R229: a directory that is not a usable clone is removed rather than opened. A clone
           // whose object store was truncated has intact refs and no objects, and every bundle
           // built from it fails in a way that reads like a policy error.
-          forgetRepo(path.toString());
+          forgetRepo(path.toString(), sourceId());
           if (Files.exists(path)) {
             RepoCloner.deleteRecursively(path);
           }
@@ -218,14 +252,43 @@ public final class GitPolicyFetcher {
    * scope can be repointed under a name that survives.
    */
   private boolean validClone(Path path) {
-    if (!Files.isDirectory(path.resolve(".git"))) {
+    // R314: a `.git` file — a worktree or submodule pointer — is a clone too. Requiring a
+    // directory classifies one as "not a clone" and removes the whole tree.
+    if (!Files.exists(path.resolve(".git"))) {
       return false;
     }
     try {
       Git git = REPOS.computeIfAbsent(path.toString(), ignored -> open(path));
       String remote = git.getRepository().getConfig().getString("remote", "origin", "url");
-      return remote == null || remote.equals(source.url());
+      if (remote != null && !remote.equals(source.url())) {
+        // R315: the clone belongs to a different repository. The source raises rather than
+        // recovering, which leaves the directory alone — deleting it here would destroy a clone
+        // that a sibling scope, or a configuration typo about to be corrected, still needs.
+        throw new IllegalStateException(
+            "clone at " + path + " points at " + Urls.redactUrl(remote)
+                + ", not at " + Urls.redactUrl(source.url()));
+      }
+      // R316: refs without objects. A clone whose object store was truncated resolves its head
+      // and fails to read it, and every bundle built from it fails in a way that reads like a
+      // policy error. Probed with a handle of its own, because the cached one keeps deleted
+      // packs readable through its own memory mappings.
+      return objectStoreHoldsItsHead(path);
+    } catch (IllegalStateException e) {
+      throw e;
     } catch (RuntimeException e) {
+      return false;
+    }
+  }
+
+  private boolean objectStoreHoldsItsHead(Path path) {
+    try (Git probe = Git.open(path.toFile())) {
+      Ref head = probe.getRepository().findRef("refs/remotes/origin/" + source.branch());
+      if (head == null || head.getObjectId() == null) {
+        return true;
+      }
+      return probe.getRepository().getObjectDatabase().has(head.getObjectId());
+    } catch (Exception e) {
+      log.warn("Invalid repo at: {}", path);
       return false;
     }
   }
@@ -240,20 +303,51 @@ public final class GitPolicyFetcher {
    */
   private boolean shouldFetch(boolean forceFetch, Path path, Git git) {
     if (forceFetch) {
+      // R312: a forced fetch is dropped when the clone was already fetched after the request was
+      // made. A burst of refreshes for one scope otherwise reaches the remote once per request.
+      Long lastFetched = REPOS_LAST_FETCHED.get(path.toString());
+      if (requestedAtMillis > 0 && lastFetched != null && lastFetched >= requestedAtMillis) {
+        log.info("Repo was fetched after refresh request, override force_fetch with False");
+      } else {
+        return true;
+      }
+    }
+    // R313: the missing-branch check comes first. A hint naming a commit the clone already holds
+    // would otherwise suppress the fetch of a branch that has never been fetched at all, and the
+    // bundle built afterwards has no head to build from.
+    try {
+      if (git.getRepository().resolve("refs/remotes/origin/" + source.branch()) == null) {
+        log.info("Target branch was not found in local clone, re-fetching the remote");
+        return true;
+      }
+    } catch (Exception e) {
       return true;
     }
     if (hintedHash != null && !hintedHash.isEmpty()) {
       try {
-        return git.getRepository().resolve(hintedHash) == null;
+        if (git.getRepository().resolve(hintedHash) != null) {
+          return false;
+        }
       } catch (Exception e) {
-        return true;
+        // A hash that will not even parse is one the clone does not hold.
       }
-    }
-    try {
-      return git.getRepository().resolve("refs/remotes/origin/" + source.branch()) == null;
-    } catch (Exception e) {
+      log.info("Hinted commit hash was not found in local clone, re-fetching the remote");
       return true;
     }
+    return false;
+  }
+
+  /**
+   * When the request that asked for this fetch was made, or zero when nothing said.
+   *
+   * <p>R312 reads it: a fetch that already happened after this instant has done the work the
+   * request wanted.
+   */
+  private long requestedAtMillis;
+
+  public GitPolicyFetcher requestedAt(long millis) {
+    this.requestedAtMillis = millis;
+    return this;
   }
 
   /** A commit the caller already knows about, which makes a remote fetch unnecessary. */
@@ -267,7 +361,9 @@ public final class GitPolicyFetcher {
   /** R232: the credentials a scope's own auth block carries, for a remote that needs them. */
   private org.eclipse.jgit.transport.UsernamePasswordCredentialsProvider credentials() {
     if (source.auth() instanceof PolicySource.GitHubTokenAuthData token) {
-      return RepoCloner.credentials("x-access-token", token.token());
+      // R398: the username the source sends. Both names work against GitHub, and a self-hosted
+      // remote checking the pair sees the same two values from either system only with this one.
+      return RepoCloner.credentials("git", token.token());
     }
     if (source.auth() instanceof PolicySource.UserPassAuthData userpass) {
       return RepoCloner.credentials(userpass.username(), userpass.password());
@@ -324,7 +420,15 @@ public final class GitPolicyFetcher {
       if (baseHash == null) {
         return maker.makeBundle(head);
       }
-      ObjectId base = repository.resolve(baseHash);
+      // R307: a base hash the clone cannot resolve — absent, or not a revision at all — asks
+      // for a difference against nothing, and the answer is the whole bundle. Letting the
+      // library's own syntax error out would turn a caller's bad query parameter into a 503.
+      ObjectId base;
+      try {
+        base = repository.resolve(baseHash);
+      } catch (Exception e) {
+        base = null;
+      }
       if (base == null) {
         return maker.makeBundle(head);
       }
@@ -361,41 +465,142 @@ public final class GitPolicyFetcher {
     return REPOS.computeIfAbsent(path.toString(), ignored -> open(path)).getRepository();
   }
 
+  /**
+   * The head of the branch this scope tracks.
+   *
+   * <p>Only the remote-tracking ref answers. R233 splits its absence by what is on disk rather
+   * than by anything in flight: an empty {@code refs/remotes/origin/} namespace is a clone that
+   * has not been populated yet and will answer soon, while siblings present and this one missing
+   * is a branch that does not exist and never will. Falling back to another ref would serve one
+   * branch's policy under another branch's name.
+   */
   private ObjectId resolveHead(Git git, Repository repository) throws Exception {
     ObjectId head = repository.resolve("refs/remotes/origin/" + source.branch());
     if (head == null) {
-      head = repository.resolve(source.branch());
-    }
-    if (head == null) {
-      head = repository.resolve("HEAD");
-    }
-    if (head == null) {
-      List<String> refs = new ArrayList<>();
-      for (Ref ref : git.branchList().call()) {
-        refs.add(ref.getName());
-      }
-      // R233: a clone with no refs at all is still being populated and will answer soon; one
-      // with other branches and not this one is a configuration that will never resolve, and a
-      // caller told to retry would retry forever.
-      if (refs.isEmpty()) {
+      List<Ref> remotes = repository.getRefDatabase().getRefsByPrefix("refs/remotes/origin/");
+      if (remotes.isEmpty()) {
         throw new CloneNotPopulated(
-            "no branch head for " + source.branch() + " in " + clonePath() + " yet");
+            "No refs/remotes/origin/* refs yet at " + clonePath());
       }
-      throw new BranchHeadNotFound(
-          "no branch head for " + source.branch() + " in " + clonePath() + ", found " + refs);
+      log.error("Could not find current branch head");
+      throw new BranchHeadNotFound("Could not find current branch head");
     }
     return head;
   }
 
-  /** Drops the cached handle so a purge can remove the directory underneath it. */
-  public static void forgetRepo(String path) {
-    GitOps.forgetSource(path);
+  /**
+   * R304: the ref this scope remembers its last-seen head on.
+   *
+   * <p>Scopes share a clone when they name the same repository and branch, so "did the head move"
+   * cannot be answered by reading the clone before and after this scope's own fetch — another
+   * scope's fetch may already have moved it. Each scope therefore keeps a local ref of its own
+   * and compares against that. A scope id that is not a legal ref name is used as its own hex.
+   */
+  public String localBranchName() {
+    String candidate = "scopes/" + scopeId;
+    return Repository.isValidRefName("refs/heads/" + candidate)
+        ? candidate
+        : "scopes/" + io.akka.opal.common.util.Hashing.hex(scopeId.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+  }
+
+  /**
+   * The head this scope last saw, and the head now, advancing the scope's own ref to the second.
+   *
+   * <p>The first is null the first time, which is what tells a caller to announce everything
+   * rather than a difference.
+   */
+  public java.util.Map.Entry<ObjectId, ObjectId> advanceTrackedHead() {
+    try {
+      Path path = clonePath();
+      if (!Files.isDirectory(path.resolve(".git"))) {
+        return new java.util.AbstractMap.SimpleEntry<>(null, null);
+      }
+      Git git = REPOS.computeIfAbsent(path.toString(), ignored -> open(path));
+      Repository repository = git.getRepository();
+      ObjectId now = resolveHead(git, repository);
+      Ref local = repository.findRef("refs/heads/" + localBranchName());
+      ObjectId before = local == null ? null : local.getObjectId();
+      org.eclipse.jgit.lib.RefUpdate update = repository.updateRef("refs/heads/" + localBranchName());
+      update.setNewObjectId(now);
+      update.setForceUpdate(true);
+      update.update();
+      return new java.util.AbstractMap.SimpleEntry<>(before, now);
+    } catch (Exception e) {
+      log.debug("could not read the tracked head for scope {}: {}", scopeId, e.toString());
+      return new java.util.AbstractMap.SimpleEntry<>(null, null);
+    }
+  }
+
+  /**
+   * Drops the cached handle so a purge can remove the directory underneath it.
+   *
+   * <p>R306: the source's failure history is keyed by its id, not by the path its clone happens
+   * to sit at, so the id is what has to be forgotten. Passing the path removes nothing: the
+   * gauge keeps counting a source nobody has, and a scope re-created against the same repository
+   * inherits the deleted one's backoff and has its first sync skipped.
+   */
+  /**
+   * The lock that guards one clone, so a purge and a sync of the same source cannot overlap.
+   *
+   * <p>Keyed by the clone path rather than the source id, which is the key the fetch path already
+   * uses — two callers taking different keys for the same directory is the same as no lock.
+   */
+  public static Object lockForPath(String clonePath) {
+    return REPO_LOCKS.computeIfAbsent(clonePath, ignored -> new Object());
+  }
+
+  /** Drops a source's failure history without touching the handle its clone path holds. */
+  public static void forgetSourceBackoff(String sourceId) {
+    GitOps.forgetSource(sourceId);
+  }
+
+  public static void forgetRepo(String path, String sourceId) {
+    if (sourceId != null) {
+      GitOps.forgetSource(sourceId);
+    }
     Git git = REPOS.remove(path);
     if (git != null) {
-      git.close();
+      try {
+        git.close();
+      } catch (RuntimeException e) {
+        // A handle that throws on close must not stop the directory being removed — the source
+        // logs and carries on for the same reason.
+        log.warn("could not close the repository handle at {}: {}", path, e.toString());
+      }
     }
     REPO_LOCKS.remove(path);
     REPOS_LAST_FETCHED.remove(path);
+  }
+
+  /**
+   * The process's resident set size in kilobytes, or zero where the platform will not say.
+   *
+   * <p>Read from {@code /proc/self/status} where there is one, the way the source reads it, and
+   * from the platform's own accounting otherwise.
+   */
+  static long residentKilobytes() {
+    Path status = Path.of("/proc/self/status");
+    if (Files.isReadable(status)) {
+      try {
+        for (String line : Files.readAllLines(status)) {
+          if (line.startsWith("VmRSS:")) {
+            return Long.parseLong(line.replaceAll("[^0-9]", ""));
+          }
+        }
+      } catch (Exception e) {
+        return 0;
+      }
+      return 0;
+    }
+    try {
+      com.sun.management.OperatingSystemMXBean os =
+          (com.sun.management.OperatingSystemMXBean)
+              java.lang.management.ManagementFactory.getOperatingSystemMXBean();
+      long committed = os.getCommittedVirtualMemorySize();
+      return committed <= 0 ? 0 : committed / 1024;
+    } catch (Exception e) {
+      return 0;
+    }
   }
 
   /** R133: what the debug route reports about these caches. */
@@ -403,12 +608,14 @@ public final class GitPolicyFetcher {
     Map<String, Object> stats = new LinkedHashMap<>();
     stats.put("pid", ProcessHandle.current().pid());
     stats.put("repos", REPOS.size());
-    stats.put("repos_keys", new ArrayList<>(REPOS.keySet()));
+    stats.put("repos_keys", REPOS.keySet().stream().sorted().toList());
     stats.put("repo_locks", REPO_LOCKS.size());
-    stats.put("repo_locks_keys", new ArrayList<>(REPO_LOCKS.keySet()));
+    stats.put("repo_locks_keys", REPO_LOCKS.keySet().stream().sorted().toList());
     stats.put("repos_last_fetched", REPOS_LAST_FETCHED.size());
-    stats.put("repos_last_fetched_keys", new ArrayList<>(REPOS_LAST_FETCHED.keySet()));
-    stats.put("rss_kb", Runtime.getRuntime().totalMemory() / 1024);
+    stats.put("repos_last_fetched_keys", REPOS_LAST_FETCHED.keySet().stream().sorted().toList());
+    // R328: the process's resident set, not the heap. The field exists to watch the memory the
+    // mapped pack files hold, and those are outside the heap entirely.
+    stats.put("rss_kb", residentKilobytes());
     return stats;
   }
 }

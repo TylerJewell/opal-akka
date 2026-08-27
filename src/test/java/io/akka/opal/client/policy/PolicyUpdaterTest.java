@@ -86,20 +86,29 @@ class PolicyUpdaterTest {
     PolicyUpdater updater = updater(new StubPolicyStore(), List.of("envs/prod", "shared"));
     updater.onPolicyUpdateMessage(
         new Policy.PolicyUpdateMessage("H1", "H2", List.of("envs/dev", "envs/prod")));
+    updater.awaitIdle(java.time.Duration.ofSeconds(5));
 
     assertEquals(1, queries.size());
     assertEquals("path=envs%2Fprod", queries.get(0));
   }
 
-  /** R94: an update naming nothing this client watches still asks — for its whole subscription. */
+  /**
+   * R293: an update naming nothing this client watches asks for no directory at all.
+   *
+   * <p>Not for the whole subscription. The empty intersection is passed through as an empty list,
+   * and an empty list contributes no {@code path} parameter — C-124 recorded the source's own URL
+   * builder dropping it — so the request is a bare {@code GET /policy} and the bundle that comes
+   * back is the whole repository rather than this client's directories.
+   */
   @Test
-  void anUpdateTouchingNothingWatchedFallsBackToTheWholeSubscription() {
+  void anUpdateTouchingNothingWatchedAsksForNoDirectory() {
     PolicyUpdater updater = updater(new StubPolicyStore(), List.of("envs/prod"));
     updater.onPolicyUpdateMessage(
         new Policy.PolicyUpdateMessage("H1", "H2", List.of("elsewhere")));
+    updater.awaitIdle(java.time.Duration.ofSeconds(5));
 
     assertEquals(1, queries.size());
-    assertEquals("path=envs%2Fprod", queries.get(0));
+    assertEquals("", queries.get(0));
   }
 
   /** R93: with nothing in the store the client asks for a complete bundle. */
@@ -107,6 +116,7 @@ class PolicyUpdaterTest {
   void anEmptyStoreAsksForACompleteBundle() {
     PolicyUpdater updater = updater(new StubPolicyStore(), List.of("."));
     updater.triggerUpdatePolicy(null, false);
+    updater.awaitIdle(java.time.Duration.ofSeconds(5));
     assertEquals("path=.", queries.get(0));
     assertTrue(!queries.get(0).contains("base_hash"), queries.get(0));
   }
@@ -123,9 +133,13 @@ class PolicyUpdaterTest {
     PolicyUpdater updater = updater(store, List.of("."));
 
     updater.triggerUpdatePolicy(null, false);
+
+    updater.awaitIdle(java.time.Duration.ofSeconds(5));
     assertTrue(queries.get(0).contains("base_hash=H1"), queries.get(0));
 
     updater.triggerUpdatePolicy(null, true);
+
+    updater.awaitIdle(java.time.Duration.ofSeconds(5));
     assertTrue(!queries.get(1).contains("base_hash"), queries.get(1));
   }
 }

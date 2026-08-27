@@ -34,6 +34,20 @@ public final class CedarRunner extends EngineRunner {
     return "cedar";
   }
 
+  /**
+   * R302: a Cedar line is logged as it came, and is never read for a panic.
+   *
+   * <p>The engine log formats describe an OPA line — a JSON record with a level and a message —
+   * and Cedar writes neither. Rendering its output through them would give it levels it did not
+   * choose, and the panic marker is a Go runtime's file name, so a Cedar line that happened to
+   * contain it would terminate an agent that had not panicked.
+   */
+  @Override
+  protected boolean handleLogLine(String line) {
+    log.info("{}", line == null ? "" : line.strip());
+    return false;
+  }
+
   @Override
   public String executablePath() {
     if (execPath != null && !execPath.isEmpty()) {

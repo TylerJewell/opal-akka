@@ -53,10 +53,13 @@ public class BundlesEndpoint extends AbstractHttpEndpoint {
         return Responses.unauthorized(e);
       }
 
-      Repository repository = runtime.repository();
-      // R36: 503 while there is no clone to read, because the answer is not yet knowable.
+      // R281: the clone is found on disk rather than read off a running watcher, so a process
+      // that serves bundles without pulling them answers.
+      Repository repository = runtime.repositoryOnDisk();
+      // R36: two different 503s. No clone directory at all is "not found"; a clone that exists
+      // and has no branch yet is "not ready", which is the window while the first clone runs.
       if (repository == null || !repository.getDirectory().exists()) {
-        return Responses.detail(StatusCodes.SERVICE_UNAVAILABLE, "policy repo is not ready");
+        return Responses.detail(StatusCodes.SERVICE_UNAVAILABLE, "policy repo was not found");
       }
 
       List<String> paths = requestContext().queryParams().getAll("path");
@@ -74,7 +77,7 @@ public class BundlesEndpoint extends AbstractHttpEndpoint {
       try {
         ObjectId head = repository.resolve("HEAD");
         if (head == null) {
-          return Responses.detail(StatusCodes.SERVICE_UNAVAILABLE, "policy repo has no head");
+          return Responses.detail(StatusCodes.SERVICE_UNAVAILABLE, "policy repo is not ready");
         }
         if (!paths.isEmpty()) {
           CommitViewer viewer = new CommitViewer(repository, head);
@@ -86,7 +89,7 @@ public class BundlesEndpoint extends AbstractHttpEndpoint {
             }
           }
         }
-        BundleMaker maker = runtime.bundleMaker(directories);
+        BundleMaker maker = runtime.bundleMaker(repository, directories);
         if (baseHash == null) {
           return Responses.ok(maker.makeBundle(head));
         }

@@ -38,8 +38,23 @@ public final class Http {
     }
   }
 
-  private static final HttpClient PLAIN =
-      HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10)).build();
+  /**
+   * R291: the egress proxy the environment names, applied to every outbound call.
+   *
+   * <p>Installed only when something is configured, so a process with no proxy variables keeps
+   * the direct connection rather than going through a selector that always answers "no proxy".
+   */
+  private static final EnvironmentProxySelector PROXIES = new EnvironmentProxySelector();
+
+  private static final HttpClient PLAIN = withProxy(HttpClient.newBuilder()).build();
+
+  static HttpClient.Builder withProxy(HttpClient.Builder builder) {
+    builder.connectTimeout(Duration.ofSeconds(10));
+    if (PROXIES.configured()) {
+      builder.proxy(PROXIES);
+    }
+    return builder;
+  }
 
   private static volatile HttpClient CLIENT = PLAIN;
 
@@ -47,6 +62,34 @@ public final class Http {
 
   public static HttpClient plain() {
     return PLAIN;
+  }
+
+  /**
+   * R384: one outbound call, inside a span of its own.
+   *
+   * <p>The source's tracer instruments the libraries it uses, so a trace has a child span per
+   * network call and the parent's own time is readable against them. Nothing instruments a call
+   * here on its own, so the calls this rebuild makes open their spans themselves — which covers
+   * the same set, because every outbound call OPAL makes goes through one of the three clients
+   * this class hands out.
+   */
+  public static <T> java.net.http.HttpResponse<T> send(
+      HttpClient client,
+      java.net.http.HttpRequest request,
+      java.net.http.HttpResponse.BodyHandler<T> handler)
+      throws java.io.IOException, InterruptedException {
+    try (io.akka.opal.common.monitoring.Span span =
+        io.akka.opal.common.monitoring.Apm.trace(
+            "http.request", request.method() + " " + Urls.redactUrl(request.uri().toString()))) {
+      java.net.http.HttpResponse<T> response = client.send(request, handler);
+      if (span != null) {
+        span.setTag("http.method", request.method());
+        span.setTag("http.url", Urls.redactUrl(request.uri().toString()));
+        span.setTag("http.status_code", String.valueOf(response.statusCode()));
+        span.setTag("span.kind", "client");
+      }
+      return response;
+    }
   }
 
   /**
@@ -108,10 +151,7 @@ public final class Http {
           keyManagers == null ? null : keyManagers.getKeyManagers(),
           trustManagers,
           new SecureRandom());
-      return HttpClient.newBuilder()
-          .sslContext(context)
-          .connectTimeout(Duration.ofSeconds(10))
-          .build();
+      return withProxy(HttpClient.newBuilder().sslContext(context)).build();
     } catch (Exception e) {
       throw new IllegalArgumentException("could not build a TLS context: " + e.getMessage(), e);
     }

@@ -24,6 +24,12 @@ import java.util.Map;
  */
 public final class ClientConfig extends Confi {
 
+  @Override
+  protected String configName() {
+    return "OpalClientConfig";
+  }
+
+
   /** Not configurable: the module id the transaction-log policy is written under. */
   public static final String OPA_HEALTH_CHECK_POLICY_PATH = "engine/healthcheck/opal.rego";
 
@@ -35,7 +41,7 @@ public final class ClientConfig extends Confi {
   }
 
   public ClientConfig() {
-    this(System.getenv());
+    this(io.akka.opal.common.confi.ConfigFiles.overlay(System.getenv()));
   }
 
   private void declare() {
@@ -73,7 +79,8 @@ public final class ClientConfig extends Confi {
             CedarServerOptions.defaults(), "CLI options used when running the Cedar agent inline");
     enumeration("INLINE_CEDAR_LOG_FORMAT", EngineLogFormat.class, EngineLogFormat.NONE, "The log format to use for inline Cedar logs");
     integer("KEEP_ALIVE_INTERVAL", 0, "The interval (in seconds) for sending keep-alive messages");
-    str("SERVER_URL", "http://localhost:7002", "The URL of the OPAL server");
+    str("SERVER_URL", "SERVER_URL", "http://localhost:7002", "The URL of the OPAL server",
+            List.of("-s"));
     strDelayed("SERVER_WS_URL",
             c -> c.getString("SERVER_URL").replace("https", "wss").replace("http", "ws"),
             "The WebSocket URL of the OPAL server");
@@ -84,7 +91,7 @@ public final class ClientConfig extends Confi {
     str("CLIENT_API_SERVER_HOST", "127.0.0.1", "(if run via CLI)  Address for the opal-client's internal server to bind");
     integer("CLIENT_API_SERVER_PORT", 7000, "(if run via CLI)  Port for the opal-client's internal server to bind");
     bool("WAIT_ON_SERVER_LOAD", false, "If set, client would wait for 200 from server's loadlimit endpoint before starting background tasks");
-    list("POLICY_SUBSCRIPTION_DIRS", List.of("."), "Directories in the policy repo to subscribe to for policy code (rego) modules");
+    list("POLICY_SUBSCRIPTION_DIRS", List.of("."), "Directories in the policy repo to subscribe to for policy code (rego) modules", ":");
     bool("DATA_UPDATER_ENABLED", true, "If set to False, opal client will not listen to dynamic data updates. Dynamic data fetching will be completely disabled.");
     list("DATA_TOPICS", List.of("policy_data"), "Data topics to subscribe to");
     strDelayed("DEFAULT_DATA_SOURCES_CONFIG_URL",

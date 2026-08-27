@@ -60,6 +60,17 @@ public final class EngineLogLine {
 
   /** R163: the text a format produces for a line, or the raw line when it is not JSON. */
   public static Rendered render(String line, EngineLogFormat format) {
+    return render(line, format, false);
+  }
+
+  /**
+   * R363: the same line, with the detail half dimmed when the log is being coloured.
+   *
+   * <p>The source marks the request and the leftover fields as a dimmer grey than the message, so
+   * a wall of engine output reads as one column of event names and one of detail. With colour off
+   * the tags resolve to nothing and the two renderings are the same string.
+   */
+  public static Rendered render(String line, EngineLogFormat format, boolean colorize) {
     if (format == null || format == EngineLogFormat.NONE) {
       return null;
     }
@@ -81,12 +92,24 @@ public final class EngineLogLine {
     if (format == EngineLogFormat.MINIMAL) {
       rendered = eventName(msg);
     } else if (format == EngineLogFormat.HTTP) {
-      rendered = httpDetails(msg, fields);
+      rendered = httpDetails(msg, fields, colorize);
     }
     if (rendered == null) {
-      rendered = entireObject(msg, fields);
+      rendered = entireObject(msg, fields, colorize);
     }
     return new Rendered(level, rendered);
+  }
+
+  /** What loguru writes for {@code <fg #999>}, and what it writes to close a colour. */
+  public static final String DIM = (char) 27 + "[38;2;153;153;153m";
+
+  public static final String BRIGHTER = (char) 27 + "[38;2;191;191;191m";
+
+  public static final String RESET = (char) 27 + "[0m";
+
+  /** Wraps one piece of a line in a colour, or leaves it alone when colour is off. */
+  private static String coloured(String text, String colour, boolean colorize) {
+    return colorize ? colour + text + RESET : text;
   }
 
   /** R165: the event name alone, padded, or nothing to say when there is no name. */
@@ -101,22 +124,33 @@ public final class EngineLogLine {
    * so a line this format cannot render falls back without repeating them.
    */
   static String httpDetails(String msg, ObjectNode fields) {
+    return httpDetails(msg, fields, false);
+  }
+
+  static String httpDetails(String msg, ObjectNode fields, boolean colorize) {
     String method = text(fields.remove("req_method"));
     String path = text(fields.remove("req_path"));
     JsonNode status = fields.remove("resp_status");
     if (msg == null || method == null || path == null) {
       return null;
     }
-    if (status == null || status.isNull()) {
-      return pad(msg) + " " + method + " " + path;
-    }
-    return pad(msg) + " " + method + " " + path + " -> " + status.asText();
+    String detail =
+        status == null || status.isNull()
+            ? method + " " + path
+            : method + " " + path + " -> " + status.asText();
+    return pad(msg) + " " + coloured(detail, DIM, colorize);
   }
 
   /** Everything the line carried that a format did not consume. */
   static String entireObject(String msg, ObjectNode fields) {
+    return entireObject(msg, fields, false);
+  }
+
+  static String entireObject(String msg, ObjectNode fields, boolean colorize) {
     String body = writeObject(fields);
-    return msg == null ? body : pad(msg) + " " + body;
+    return msg == null
+        ? coloured(body, DIM, colorize)
+        : pad(msg) + " " + coloured(body, BRIGHTER, colorize);
   }
 
   /**
@@ -159,8 +193,13 @@ public final class EngineLogLine {
     return value.toString();
   }
 
+  /** The column the message is padded to, which is where the detail half begins. */
+  static final int PAD_WIDTH = 20;
+
   private static String pad(String value) {
-    return value.length() >= 20 ? value : value + " ".repeat(20 - value.length());
+    return value.length() >= PAD_WIDTH
+        ? value
+        : value + " ".repeat(PAD_WIDTH - value.length());
   }
 
   private static String text(JsonNode node) {

@@ -28,22 +28,24 @@ separate repository, `akka-specify-harness`, under `opal-port/`. It is private f
 
 ## permitio/opal → this port
 
-📉 16,783 Python lines → **16,962 Java lines**<br>
-📁 165 files → **127 files**<br>
-🎯 235 answers compared → **235 of 235 agree**<br>
+📉 16,783 Python lines → **19,101 Java lines**<br>
+📁 165 files → **132 files**<br>
+🎯 294 answers compared → **294 of 294 agree**<br>
 🔍 234 elements of the original's surface → **234 covered**<br>
+📋 267 rules written down → **404**<br>
 ⚙️ 177 configuration entries → **177, and 174 of them change something**<br>
-⚡ 6.27 → **1.29** microseconds, working out who a change is addressed to<br>
-⚡ 11.07 → **1.11** milliseconds, writing a whole rule bundle into an engine<br>
-⚡ 3.71 → **2.95** milliseconds, building a rule bundle from a commit<br>
+⚡ 5.96 → **2.39** microseconds, working out who a change is addressed to<br>
+⚡ 10.02 → **1.33** milliseconds, writing a whole rule bundle into an engine<br>
+⚡ 3.78 → **2.17** milliseconds, building a rule bundle from a commit<br>
 🧪 0 rules broken on purpose to check a test notices → **25**<br>
-✅ 45 tests → **315**
+✅ 45 tests → **341**
 
-This port is **1% larger** than the part of the original it replaces, and that is the honest
-direction: about 1,400 lines of it are behaviour the original buys from libraries — the
-connection protocol, the metric wire format, the trace payload and the log formatting — which do
-not count on the original's side. [`bench/REPORT.md`](bench/REPORT.md) §3 says where every line
-went.
+This port is **14% larger** than the part of the original it replaces, and that is the honest
+direction: about 1,500 lines of it are behaviour the original buys from libraries — the
+connection protocol, the metric wire format, the trace payload, the log formatting and the
+permissive url splitter — which do not count on the original's side, and about 2,300 more are
+what a second module-by-module walk over the original found the first walk had missed.
+[`bench/REPORT.md`](bench/REPORT.md) §3 says where every line went.
 
 Full method, and the numbers that did not make this list: [`bench/REPORT.md`](bench/REPORT.md).
 
@@ -51,11 +53,11 @@ Full method, and the numbers that did not make this list: [`bench/REPORT.md`](be
 
 ## What it took to build
 
-⏱️ **168.5 hours** from the first command to the published repository, **11.1** of them active<br>
-💬 **3,337** exchanges with the model<br>
-✍️ **3,216,148** tokens written by the model, **1,430,857,283** counting everything sent and re-sent<br>
+⏱️ **173.3 hours** from the first command to the published repository, **15.0** of them active<br>
+💬 **4,850** exchanges with the model<br>
+✍️ **4,216,374** tokens written by the model, **2,124,700,000** counting everything sent and re-sent<br>
 🙋 **0** questions to a human<br>
-🧪 **315** tests
+🧪 **341** tests
 
 ```bash
 python toolkit/tokens.py --port opal
@@ -162,6 +164,43 @@ Every behaviour that may differ, listed as a decision. A behaviour nobody checke
 - **The three broadcast transports are constructed and not connected.** Redis, Kafka and
   Postgres are selected by scheme and their reader loops are covered in process; what happens
   against real ones is **not checked**.
+- **A client asked to reconcile is closed with an ordinary close, not with 1012.** The source
+  closes each connection with the "service restart" status so a client can tell a reconciliation
+  from a network drop. The websocket handler on this target is a flow of text frames and has no
+  close frame to give a code to, so the close carries the default. A client reconnects and
+  refetches either way, which is what the code is for; what it cannot do is tell the two apart in
+  its own log.
+- **The clone wait is never abandoned because the caller hung up.** The source polls
+  `request.is_disconnected()` while it holds a request waiting for a scope's clone, and gives the
+  slot back when nobody is listening. This target hands a handler a finished request and takes an
+  answer back; it does not report that the connection went away underneath. The wait is bounded
+  and capped the same way, and its `disconnected` outcome is therefore never counted.
+- **The rendered pages take their prefix from a header, not from the web server.** Behind a proxy
+  that mounts the process under a path, the source builds the document's address from the root
+  path its web server was started with. There is no such argument here, so the prefix is read
+  from `X-Forwarded-Prefix` — the header the proxy sends to say what it stripped. With no proxy
+  in front the page is byte for byte what the source serves.
+- **The set of scopes lives in an entity of its own, and that bounds how many there can be.**
+  OPAL lists its scopes by scanning Redis's keyspace, which has no such bound. Here the ids are
+  one entity's state, which this runtime replicates up to a megabyte — about twenty-five thousand
+  ids of the length a tenant name has. A deployment past that would need the listing split across
+  several. **Not checked:** what this runtime does at that ceiling, because reaching it needs
+  twenty-five thousand tenants.
+- **A traceback carries no local variables.** `LOG_DIAGNOSE` turns on loguru's rendering of the
+  locals at each frame. A Java stack trace has no such thing, so the entry turns on the git
+  transport's own tracing — which is the other half of what the source uses it for — and the
+  rendered locals have no counterpart.
+- **A web-server line that the source prints twice is printed once.** With
+  `LOG_PATCH_UVICORN_LOGS` off, the source leaves its web server's loggers with their own
+  handlers *and* propagating to the root, so a line appears twice in two shapes. This target's
+  web server installs no handlers of its own, so the same line appears once, in this format.
+- **An Ed25519 or EC private key is enough to sign with.** The source's key caster loads all
+  three families and its JWT library signs from the private key alone. This derives the public
+  half rather than asking for it, which is the same input and the same output; what differs is
+  that the rebuild needs one more library on its classpath to do it, named in `pom.xml`.
+- **`GET /scopes` is one read per scope.** So is the original's: its listing scans the keyspace
+  and reads each key. Named here because a reader who expects one query will otherwise find it
+  and think it a defect.
 - **What a fleet of a hundred clients does.** Every measured comparison is in-process. The
   behaviour under real load is **not checked**.
 
@@ -235,7 +274,7 @@ Restart Claude Code when it asks.
 mvn verify
 ```
 
-315 tests: 250 that need no runtime, and 65 that start one.
+341 tests: 267 that need no runtime, and 74 that start one.
 
 ### Run it
 

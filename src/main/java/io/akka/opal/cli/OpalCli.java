@@ -66,7 +66,7 @@ public final class OpalCli {
                 ? Which.client
                 : Which.server;
     String[] rest = args.length > 0 && args[0].startsWith("--client") ? tail(args) : args;
-    int code = new OpalCli(which, System.getenv(), System.out).run(rest);
+    int code = new OpalCli(which, io.akka.opal.common.confi.ConfigFiles.overlay(System.getenv()), System.out).run(rest);
     System.exit(code);
   }
 
@@ -78,10 +78,10 @@ public final class OpalCli {
   public int run(String[] args) {
     List<String> arguments = new ArrayList<>(Arrays.asList(args));
     Map<String, String> overrides = new LinkedHashMap<>();
-    String command = extractCommand(arguments, overrides);
 
     Confi own = which == Which.server ? new ServerConfig(environment) : new ClientConfig(environment);
     CommonConfig common = new CommonConfig(environment);
+    String command = extractCommand(arguments, overrides, flagsOf(own, common));
     overrides.forEach(
         (key, value) -> {
           if (!own.applyCommandLine(key, value)) {
@@ -114,8 +114,39 @@ public final class OpalCli {
     };
   }
 
-  /** Pulls the subcommand out, leaving its own arguments and collecting the global options. */
-  private String extractCommand(List<String> arguments, Map<String, String> overrides) {
+  /**
+   * The short flags the configuration entries declare, mapped to the entry each names.
+   *
+   * <p>R334: an entry may carry flags of its own — {@code -t} for the client token, {@code -s}
+   * for the server url — and a caller writing one means that entry.
+   */
+  static Map<String, String> flagsOf(Confi own, CommonConfig common) {
+    Map<String, String> flags = new LinkedHashMap<>();
+    for (Confi configuration : List.of(own, common)) {
+      configuration
+          .entries()
+          .forEach(
+              (name, entry) -> {
+                if (entry.flags() != null) {
+                  for (String flag : entry.flags()) {
+                    flags.put(flag, name);
+                  }
+                }
+              });
+    }
+    return flags;
+  }
+
+  /**
+   * Pulls the subcommand out, leaving its own arguments and collecting the global options.
+   *
+   * <p>R334: three spellings, which are the three the source's own option parser accepts —
+   * {@code --name=value}, {@code --name value}, and a declared short flag with its value after
+   * it. Reading only the first left every space-separated global option in place, where the
+   * subcommand ignored it and the entry kept its default.
+   */
+  private String extractCommand(
+      List<String> arguments, Map<String, String> overrides, Map<String, String> flags) {
     List<String> commands =
         List.of("run", "print-config", "obtain-token", "generate-secret", "publish-data-update",
             "version");
@@ -134,6 +165,14 @@ public final class OpalCli {
           overrides.put(key, value);
           arguments.remove(i--);
         }
+        continue;
+      }
+      String key =
+          argument.startsWith("--") ? optionToKey(argument.substring(2)) : flags.get(argument);
+      if (key != null && i + 1 < arguments.size() && !arguments.get(i + 1).startsWith("-")) {
+        overrides.put(key, arguments.get(i + 1));
+        arguments.remove(i + 1);
+        arguments.remove(i--);
       }
     }
     return null;
@@ -210,13 +249,19 @@ public final class OpalCli {
     }
     long amount = Long.parseLong(arguments.get(index + 1));
     String unit = arguments.get(index + 2);
+    // R332: the seven units the source's own duration type takes, and nothing else. A unit it
+    // does not know raises there rather than quietly becoming days, which would turn a typo in
+    // `--ttl 30 dayz` into a year-long token.
     return switch (unit) {
+      case "microseconds" -> Duration.ofNanos(amount * 1000);
       case "milliseconds" -> Duration.ofMillis(amount);
       case "seconds" -> Duration.ofSeconds(amount);
       case "minutes" -> Duration.ofMinutes(amount);
       case "hours" -> Duration.ofHours(amount);
+      case "days" -> Duration.ofDays(amount);
       case "weeks" -> Duration.ofDays(amount * 7);
-      default -> Duration.ofDays(amount);
+      default -> throw new IllegalArgumentException(
+          "'" + unit + "' is an invalid keyword argument for __new__()");
     };
   }
 
@@ -224,6 +269,14 @@ public final class OpalCli {
   private int generateSecret(List<String> arguments) {
     int size = Integer.parseInt(optionValue(arguments, "--size", "32"));
     String format = optionValue(arguments, "--format", "urlsafe");
+    // R333: one of three, refused where it is read. Falling through to url-safe for an
+    // unrecognised value hands back a secret in a format nobody asked for.
+    if (!List.of("hex", "bytes", "urlsafe").contains(format)) {
+      out.println(
+          "Error: Invalid value for '--format': '" + format
+              + "' is not one of 'hex', 'bytes', 'urlsafe'.");
+      return 2;
+    }
     byte[] bytes = new byte[size];
     new SecureRandom().nextBytes(bytes);
     out.println(
@@ -294,12 +347,21 @@ public final class OpalCli {
                     data == null ? null : Rpc.MAPPER.readTree(data),
                     null));
       } else {
-        entries =
-            Arrays.asList(
-                Rpc.MAPPER.readValue(entriesJson, Data.DataSourceEntry[].class));
+        // R330: a value that is not a list is ignored and the command carries on with none,
+        // rather than failing. The single-entry options may still supply one.
+        try {
+          entries =
+              Arrays.asList(Rpc.MAPPER.readValue(entriesJson, Data.DataSourceEntry[].class));
+        } catch (Exception badEntries) {
+          out.println("Bad input for --entires was ignored");
+          entries = List.of();
+        }
       }
       Data.DataUpdate update = new Data.DataUpdate(null, entries, reason, null);
       out.println("Publishing event:");
+      // R331: the update itself, in the source's own repr, before it goes. Its secret-bearing
+      // fields are redacted by that repr, which is why it is safe to print at all.
+      out.println(io.akka.opal.common.util.Repr.repr(update));
       HttpRequest.Builder request =
           HttpRequest.newBuilder(URI.create(serverUrl + serverRoute))
               .header("content-type", "application/json")
@@ -315,6 +377,8 @@ public final class OpalCli {
       if (response.statusCode() == 200) {
         out.println("Event Published Successfully");
       } else {
+        // The source's own line, brace for brace: it writes the placeholder rather than the
+        // status, and a caller reading its output sees exactly this.
         out.println("Event publishing failed with status-code - {res.status}");
         out.println(response.body());
       }
@@ -327,7 +391,7 @@ public final class OpalCli {
 
   /** R138: the version of the common package. */
   public static String version() {
-    return "0.0.0";
+    return io.akka.opal.common.util.Version.current();
   }
 
   // -- help ----------------------------------------------------------------
@@ -359,12 +423,38 @@ public final class OpalCli {
     }
     text.append("\nOptions:\n");
     for (ConfiEntry<?> entry : own.entries().values()) {
-      text.append("  ").append(entry.optionName()).append('\n');
+      appendOption(text, entry);
     }
     for (ConfiEntry<?> entry : common.entries().values()) {
-      text.append("  ").append(entry.optionName()).append('\n');
+      appendOption(text, entry);
     }
     return text.toString();
+  }
+
+  /**
+   * R335: one option per line, with the flags it also answers to, what it is for, and what it is
+   * set to now.
+   *
+   * <p>The name alone tells an operator nothing: the whole point of listing a hundred and
+   * seventy-seven entries is that each one says what it does and what it would be if left alone.
+   */
+  private static void appendOption(StringBuilder text, ConfiEntry<?> entry) {
+    StringBuilder names = new StringBuilder("  ").append(entry.optionName());
+    if (entry.flags() != null) {
+      for (String flag : entry.flags()) {
+        names.append(", ").append(flag);
+      }
+    }
+    text.append(names);
+    String description = entry.description();
+    if (description != null && !description.isEmpty()) {
+      text.append("  ").append(description);
+    }
+    Object value = entry.value();
+    if (value != null) {
+      text.append("  [default: ").append(io.akka.opal.common.util.Repr.python(value)).append(']');
+    }
+    text.append('\n');
   }
 
   String docs() {

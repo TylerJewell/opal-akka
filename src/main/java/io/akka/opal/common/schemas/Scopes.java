@@ -12,6 +12,12 @@ public final class Scopes {
   public record Scope(
       String scope_id, PolicySource.GitPolicyScopeSource policy, Data.DataSourceConfig data) {
     public Scope {
+      if (scope_id == null) {
+        throw new Schemas.ValidationFailure("scope_id: field required");
+      }
+      if (policy == null) {
+        throw new Schemas.ValidationFailure("policy: field required");
+      }
       if (data == null) {
         data = new Data.DataSourceConfig(List.of());
       }

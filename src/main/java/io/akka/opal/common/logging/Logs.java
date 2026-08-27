@@ -51,6 +51,7 @@ public final class Logs {
     boolean colorize = Boolean.TRUE.equals(config.get("LOG_COLORIZE"));
     boolean traceback = Boolean.TRUE.equals(config.get("LOG_TRACEBACK"));
     boolean serialize = Boolean.TRUE.equals(config.get("LOG_SERIALIZE"));
+    installGitTracing(Boolean.TRUE.equals(config.get("LOG_DIAGNOSE")));
     List<String> include = config.get("LOG_MODULE_INCLUDE_LIST");
     List<String> exclude = config.get("LOG_MODULE_EXCLUDE_LIST");
 
@@ -72,25 +73,16 @@ public final class Logs {
       root.addAppender(fileAppender(context, config, format, traceback, include, exclude));
     }
 
-    if (!Boolean.TRUE.equals(config.get("LOG_PATCH_UVICORN_LOGS"))) {
-      // The source leaves the web server's own logging alone when this is off, so its lines keep
-      // whatever shape that server gives them rather than this format.
+    // R378: with patching off, the web server's own loggers are left exactly as they are — no
+    // appender of their own and no break in propagation. That is what the source does: it
+    // replaces their handlers only when asked to, and otherwise leaves them propagating to the
+    // root. Taking them off the root instead would silence lines the source still prints.
+    if (Boolean.TRUE.equals(config.get("LOG_PATCH_UVICORN_LOGS"))) {
       for (String name : WEB_SERVER_LOGGERS) {
-        ch.qos.logback.classic.Logger logger = context.getLogger(name);
-        logger.setAdditive(false);
-        ConsoleAppender<ILoggingEvent> plain = new ConsoleAppender<>();
-        plain.setContext(context);
-        plain.setName("web-server-" + name);
-        LayoutWrappingEncoder<ILoggingEvent> encoder = new LayoutWrappingEncoder<>();
-        encoder.setContext(context);
-        PlainLayout layout = new PlainLayout();
-        layout.setContext(context);
-        layout.start();
-        encoder.setLayout(layout);
-        encoder.start();
-        plain.setEncoder(encoder);
-        plain.start();
-        logger.addAppender(plain);
+        // Patching in the source means one handler and no propagation, so a line appears once
+        // and in this format. Here the root already carries that handler, so what patching adds
+        // is the half that stops the duplicate.
+        context.getLogger(name).setAdditive(true);
       }
     }
   }
@@ -272,6 +264,44 @@ public final class Logs {
     }
   }
 
+  /**
+   * R275: {@code LOG_DIAGNOSE} turns on the git transport's own tracing.
+   *
+   * <p>The source sets {@code GIT_TRACE} and {@code GIT_CURL_VERBOSE} around every ssh clone and
+   * pull, which makes the protocol conversation appear in the log it captures. The git here is a
+   * library rather than a subprocess, and its equivalent is the ssh layer's logger.
+   */
+  private static void installGitTracing(boolean diagnose) {
+    if (!diagnose) {
+      com.jcraft.jsch.JSch.setLogger(new com.jcraft.jsch.Logger() {
+        @Override
+        public boolean isEnabled(int level) {
+          return false;
+        }
+
+        @Override
+        public void log(int level, String message) {}
+      });
+      return;
+    }
+    org.slf4j.Logger git = LoggerFactory.getLogger("git.transport");
+    com.jcraft.jsch.JSch.setLogger(new com.jcraft.jsch.Logger() {
+      @Override
+      public boolean isEnabled(int level) {
+        return true;
+      }
+
+      @Override
+      public void log(int level, String message) {
+        if (level >= com.jcraft.jsch.Logger.WARN) {
+          git.warn(message);
+        } else {
+          git.info(message);
+        }
+      }
+    });
+  }
+
   /** The object a record becomes when `LOG_SERIALIZE` is on. */
   static final class SerializedLayout extends LayoutBase<ILoggingEvent> {
 
@@ -300,17 +330,4 @@ public final class Logs {
     }
   }
 
-  /** What a logger left out of this configuration keeps writing. */
-  static final class PlainLayout extends LayoutBase<ILoggingEvent> {
-
-    @Override
-    public String doLayout(ILoggingEvent event) {
-      return event.getLevel()
-          + " "
-          + event.getLoggerName()
-          + " - "
-          + event.getFormattedMessage()
-          + "\n";
-    }
-  }
 }

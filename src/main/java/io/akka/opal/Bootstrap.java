@@ -46,9 +46,14 @@ public class Bootstrap implements ServiceSetup {
    * {@code .env}/{@code .ini} files — three ways of saying the same thing. This adds a fourth
    * that the JVM already has, so a deployment can pass {@code -DOPAL_SCOPES=true} the way it
    * passes every other JVM setting, and a test can configure a service it does not fork.
+   *
+   * <p>The four rank: a system property outranks an environment variable, which outranks the
+   * file {@link io.akka.opal.common.confi.ConfigFiles} found, which outranks the entry's default.
    */
   static Map<String, String> environment() {
-    Map<String, String> environment = new HashMap<>(System.getenv());
+    Map<String, String> environment =
+        new HashMap<>(
+            io.akka.opal.common.confi.ConfigFiles.overlay(System.getenv()));
     System.getProperties()
         .forEach(
             (key, value) -> {
@@ -77,9 +82,22 @@ public class Bootstrap implements ServiceSetup {
     Map<String, String> environment = environment();
     common = new CommonConfig(environment);
     io.akka.opal.common.logging.Logs.configure(common);
-    io.akka.opal.common.util.Http.configureClientTrust(
-        Boolean.TRUE.equals(common.get("CLIENT_SELF_SIGNED_CERTIFICATES_ALLOWED")),
-        common.getString("CLIENT_SSL_CONTEXT_TRUSTED_CA_FILE"));
+    boolean selfSignedAllowed =
+        Boolean.TRUE.equals(common.get("CLIENT_SELF_SIGNED_CERTIFICATES_ALLOWED"));
+    String trustedCaFile = common.getString("CLIENT_SSL_CONTEXT_TRUSTED_CA_FILE");
+    io.akka.opal.common.util.Http.configureClientTrust(selfSignedAllowed, trustedCaFile);
+    // R406: said out loud, and only when a certificate authority was actually installed. The
+    // entry on its own does nothing — the source builds a context only when it also has a CA
+    // file that exists — so a deployment that set the flag and no file is trusting nothing
+    // extra, and a warning there would be about a setting rather than about the process.
+    if (selfSignedAllowed
+        && trustedCaFile != null
+        && !trustedCaFile.isEmpty()
+        && java.nio.file.Files.isRegularFile(
+            java.nio.file.Path.of(
+                io.akka.opal.common.git.RepoCloner.expandUser(trustedCaFile)))) {
+      log.warn("OPAL client is configured to trust self-signed certificates");
+    }
     io.akka.opal.common.git.RepoCloner.configureSshKeyFile(
         common.getString("GIT_SSH_KEY_FILE"));
     io.akka.opal.api.Responses.configureCors(common.get("ALLOWED_ORIGINS"));

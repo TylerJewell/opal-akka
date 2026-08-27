@@ -97,10 +97,9 @@ public final class BundleMaker {
         log.info("Manifest file {} not found, assuming empty", manifestPath);
         return explicit;
       }
-      for (String rawEntry : viewer.read(manifestFile.get()).split("\\R", -1)) {
-        if (rawEntry.isEmpty()) {
-          continue;
-        }
+      for (String rawEntry : splitLines(viewer.read(manifestFile.get()))) {
+        // A blank line is not skipped: joined to the directory it names the directory itself,
+        // which is not inside itself, so it is reported the way any other outside path is.
         String entry = PurePath.join(directory, rawEntry);
         if (PurePath.isAbsolute(rawEntry) || !escapesNothing(directory, entry)) {
           log.warn("  Path '{}' is outside current .manifest directory", entry);
@@ -138,6 +137,25 @@ public final class BundleMaker {
    * The dots are collapsed first: a manifest line of {@code ../other/x.rego} joins to a path
    * whose unresolved parents still include the directory it is trying to leave.
    */
+  /**
+   * The lines of a text, the way the source's own splitter gives them: a terminator at the end
+   * closes the last line rather than opening an empty one.
+   */
+  static List<String> splitLines(String text) {
+    List<String> lines = new ArrayList<>();
+    if (text == null || text.isEmpty()) {
+      return lines;
+    }
+    for (String line : text.split("\\R", -1)) {
+      lines.add(line);
+    }
+    char last = text.charAt(text.length() - 1);
+    if (!lines.isEmpty() && lines.get(lines.size() - 1).isEmpty() && (last == '\n' || last == '\r')) {
+      lines.remove(lines.size() - 1);
+    }
+    return lines;
+  }
+
   private static boolean escapesNothing(String directory, String entry) {
     return PurePath.parents(PurePath.resolveDots(entry))
         .contains(PurePath.resolveDots(directory));

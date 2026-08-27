@@ -67,7 +67,7 @@ public class StubPolicyStore implements PolicyStoreClient {
   }
 
   @Override
-  public JsonNode getDataWithInput(String path, JsonNode input) {
+  public Proxied getDataWithInput(String path, JsonNode input) {
     return null;
   }
 

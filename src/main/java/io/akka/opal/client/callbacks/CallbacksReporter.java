@@ -70,20 +70,41 @@ public final class CallbacksReporter {
       requests.forEach(request -> urls.add(io.akka.opal.common.util.Urls.redactUrl(request.url())));
       log.info("Reporting the update to requested callbacks {}", urls);
 
+      // R298: every callback is sent at once, not one after another. The source gathers them,
+      // so a callback that hangs delays only itself; sending them in a loop would put every
+      // later callback behind the slowest one.
+      List<java.util.concurrent.CompletableFuture<Void>> sent = new ArrayList<>();
       for (CallbacksRegister.CallbackConfig request : requests) {
-        try {
-          fetcher.fetch(request.url(), request.config());
-        } catch (Exception e) {
-          log.error(
-              "Failed to send report to {}, info={}",
-              io.akka.opal.common.util.Urls.redactUrl(request.url()),
-              io.akka.opal.common.util.Urls.redactUrlInText(e.toString(), request.url()));
-        }
+        sent.add(
+            java.util.concurrent.CompletableFuture.runAsync(
+                () -> {
+                  try {
+                    fetcher.fetch(request.url(), request.config());
+                  } catch (Exception e) {
+                    log.error(
+                        "Failed to send report to {}, info={}",
+                        io.akka.opal.common.util.Urls.redactUrl(request.url()),
+                        io.akka.opal.common.util.Urls.redactUrlInText(
+                            e.toString(), request.url()));
+                  }
+                },
+                CALLBACKS));
       }
+      java.util.concurrent.CompletableFuture.allOf(sent.toArray(new java.util.concurrent.CompletableFuture[0]))
+          .join();
     } catch (Exception e) {
       log.error("Failed to execute report_update_results: {}", e.toString());
     }
   }
+
+  /** Where the callbacks are sent from, so one slow endpoint does not hold up the others. */
+  private static final java.util.concurrent.ExecutorService CALLBACKS =
+      java.util.concurrent.Executors.newCachedThreadPool(
+          runnable -> {
+            Thread thread = new Thread(runnable, "opal-callbacks");
+            thread.setDaemon(true);
+            return thread;
+          });
 
   private static Data.HttpFetcherConfig withData(Data.HttpFetcherConfig config, String data) {
     Data.HttpFetcherConfig base = config == null ? Data.HttpFetcherConfig.defaults() : config;

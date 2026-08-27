@@ -18,16 +18,18 @@ import org.bouncycastle.util.io.pem.PemObject;
 import org.bouncycastle.util.io.pem.PemWriter;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
 
 /**
  * The secured server, over real HTTP — SPEC-002 R71 to R74, compared with the refusals the
  * original produced when it was run with the same keys and master token.
  */
+@ExtendWith(OpalProcessExtension.class)
 public class SecurityEndpointIntegrationTest extends TestKitSupport {
 
-  private static final Path JWKS_DIR;
+  private static Path JWKS_DIR;
 
-  static {
+  static void startProcess() {
     try {
       KeyPairGenerator generator = KeyPairGenerator.getInstance("RSA");
       generator.initialize(2048);

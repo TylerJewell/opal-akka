@@ -276,7 +276,7 @@ public final class CedarClient implements PolicyStoreClient {
   }
 
   @Override
-  public JsonNode getDataWithInput(String path, JsonNode input) {
+  public Proxied getDataWithInput(String path, JsonNode input) {
     throw new UnsupportedOperationException("Cedar has no document-with-input query");
   }
 

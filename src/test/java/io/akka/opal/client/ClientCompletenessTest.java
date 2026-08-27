@@ -40,7 +40,10 @@ class ClientCompletenessTest {
   void theTenantPrefixIsTakenOffATopic() {
     assertEquals("policy_data", PubSubClient.stripTenantPrefix("app_1::policy_data"));
     assertEquals("policy_data", PubSubClient.stripTenantPrefix("policy_data"));
-    assertEquals("a::b", PubSubClient.stripTenantPrefix("app::a::b"));
+    // The second field, not the rest: C-122 recorded the source answering `a` here.
+    assertEquals("a", PubSubClient.stripTenantPrefix("app::a::b"));
+    assertEquals("leading", PubSubClient.stripTenantPrefix("::leading"));
+    assertEquals("", PubSubClient.stripTenantPrefix("app::"));
     assertEquals(null, PubSubClient.stripTenantPrefix(null));
   }
 

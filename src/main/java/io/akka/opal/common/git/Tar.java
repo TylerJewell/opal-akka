@@ -17,6 +17,14 @@ public final class Tar {
   /** Called once per member, with a stream positioned at that member's content. */
   public interface Visitor {
     void visit(String name, boolean isDirectory, long size, InputStream content) throws IOException;
+
+    /**
+     * A link member whose target stays inside the extraction directory.
+     *
+     * <p>Ignored unless the caller wants it: the walk's job is to refuse the members that are
+     * unsafe, and a caller that has no use for a link is not made to handle one.
+     */
+    default void visitLink(String name, String target, boolean symbolic) throws IOException {}
   }
 
   private static final int BLOCK = 512;
@@ -59,21 +67,26 @@ public final class Tar {
         continue;
       }
 
-      // R191: a member that is a link or a device is refused rather than written.
+      // R191: a link member is refused when its target leaves the extraction directory, and a
+      // device member is refused whatever it is.
       //
-      // A symbolic or hard link naming a path outside the extraction directory would be a way
-      // to write anywhere the process can reach, and a character or block device is not a thing
-      // a policy bundle contains. Both are refused whatever they point at: nothing in a bundle
-      // needs either, so there is no case to distinguish.
+      // A link naming a path outside the directory is a way to write anywhere the process can
+      // reach; one naming a path inside it is an ordinary part of an archive. The two kinds are
+      // named differently in the refusal because the source names them differently and a caller
+      // reading the message is told which kind it was.
       if (typeFlag == '1' || typeFlag == '2') {
         String linkName = text(header, 157, 100);
-        // The two are refused for the same reason and named differently, because the source
-        // names them differently and a caller reading the message is told which kind it was.
-        throw new IOException(
-            "Attempted directory traversal via "
-                + (typeFlag == '2' ? "symlink" : "link")
-                + " for member: "
-                + linkName);
+        if (escapes(linkName)) {
+          throw new IOException(
+              "Attempted directory traversal via "
+                  + (typeFlag == '2' ? "symlink" : "link")
+                  + " for member: "
+                  + linkName);
+        }
+        visitor.visitLink(name, linkName, typeFlag == '2');
+        skip(in, size);
+        skipPadding(in, size);
+        continue;
       }
       if (typeFlag == '3' || typeFlag == '4') {
         throw new IOException("tarfile returns true for isblk() or ischr()");
@@ -95,6 +108,35 @@ public final class Tar {
         skipPadding(in, size);
       }
     }
+  }
+
+  /**
+   * Whether a member's own name or a link's target reaches outside the directory it is being
+   * written into. An absolute path is outside by definition; a relative one is outside when its
+   * {@code ..} segments outnumber the segments they could climb.
+   */
+  static boolean escapes(String path) {
+    if (path == null || path.isEmpty()) {
+      return false;
+    }
+    if (path.startsWith("/") || path.matches("^[A-Za-z]:[\\/].*")) {
+      return true;
+    }
+    int depth = 0;
+    for (String part : path.split("/")) {
+      if (part.isEmpty() || part.equals(".")) {
+        continue;
+      }
+      if (part.equals("..")) {
+        depth--;
+        if (depth < 0) {
+          return true;
+        }
+      } else {
+        depth++;
+      }
+    }
+    return false;
   }
 
   private static boolean isAllZero(byte[] block) {

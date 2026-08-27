@@ -106,18 +106,28 @@ public final class TarToLocalGit {
     }
   }
 
+  /**
+   * Unpacks the bundle into the clone path.
+   *
+   * <p>Two passes over the archive, because the source reads every member's name and validates
+   * the whole list before it extracts anything: a bundle whose forbidden member comes last must
+   * leave nothing on disk, and a single streaming pass would already have written the members
+   * before it.
+   */
   void extractBundleTar() throws IOException {
     List<String> names = new ArrayList<>();
+    try (InputStream in = gzipped()) {
+      Tar.forEach(in, (name, isDirectory, size, entryStream) -> names.add(name));
+    }
+    validateTarOrThrow(names);
+    if (names.isEmpty()) {
+      throw new InvalidBundle("No files in bundle");
+    }
     Files.createDirectories(localClonePath);
-    try (InputStream in =
-        new GZIPInputStream(new BufferedInputStream(Files.newInputStream(tmpBundlePath)))) {
+    try (InputStream in = gzipped()) {
       Tar.forEach(
           in,
           (name, isDirectory, size, entryStream) -> {
-            names.add(name);
-            if (name.equals(".git") || name.startsWith(".git/")) {
-              throw new InvalidBundle("No .git files are allowed in OPAL api bundle");
-            }
             Path target = localClonePath.resolve(name).normalize();
             if (!target.startsWith(localClonePath)) {
               throw new InvalidBundle("tar member escapes the destination: " + name);
@@ -130,8 +140,22 @@ public final class TarToLocalGit {
             Files.copy(entryStream, target, StandardCopyOption.REPLACE_EXISTING);
           });
     }
-    if (names.isEmpty()) {
-      throw new InvalidBundle("No files in bundle");
+  }
+
+  private InputStream gzipped() throws IOException {
+    return new GZIPInputStream(new BufferedInputStream(Files.newInputStream(tmpBundlePath)));
+  }
+
+  /**
+   * R190: a member named exactly {@code .git} is refused.
+   *
+   * <p>The name is matched whole rather than as a prefix: the source tests membership of the
+   * archive's own name list, so an archive carrying {@code .git/config} and no {@code .git}
+   * entry passes this check.
+   */
+  static void validateTarOrThrow(List<String> names) {
+    if (names.contains(".git")) {
+      throw new InvalidBundle("No .git files are allowed in OPAL api bundle");
     }
   }
 }

@@ -6,6 +6,9 @@ import java.security.MessageDigest;
 /** The two digests OPAL takes: of a fetched value, and of a downloaded file. */
 public final class Hashing {
 
+  private static final org.slf4j.Logger LOG =
+      org.slf4j.LoggerFactory.getLogger(Hashing.class);
+
   private Hashing() {}
 
   public static String sha256(byte[] bytes) {
@@ -42,6 +45,10 @@ public final class Hashing {
     try {
       return sha256(PythonJson.dumps(value));
     } catch (Exception e) {
+      // R359: the empty digest is a real answer that travels in a report, so the reason it is
+      // empty is said once here. The value itself is not logged — it may be the credential-bearing
+      // payload that would not serialise.
+      LOG.error("Failed to calculate hash for data", e);
       return "";
     }
   }

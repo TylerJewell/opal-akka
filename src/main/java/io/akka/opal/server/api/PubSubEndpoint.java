@@ -117,6 +117,19 @@ public class PubSubEndpoint extends AbstractHttpEndpoint {
                       (subscriberId, topics) -> {
                         if (subscriberId.equals(channel.subscriberId(false))) {
                           runtime.clientTracker().onUnsubscribe(clientInfo, topics);
+                          // R325: an explicit unsubscribe takes the channel out of the fleet's
+                          // statistics too, and says so to every replica. A client that
+                          // unsubscribes without dropping its socket would otherwise be listed
+                          // as connected for as long as it stayed open.
+                          if (runtime.statistics() != null) {
+                            runtime.statistics().removeClient(channel.id());
+                            runtime.publish(
+                                List.of(
+                                    runtime
+                                        .common()
+                                        .getString("STATISTICS_REMOVE_CLIENT_CHANNEL")),
+                                channel.id());
+                          }
                         }
                       });
 

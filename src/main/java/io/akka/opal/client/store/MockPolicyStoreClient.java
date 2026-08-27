@@ -86,11 +86,19 @@ public final class MockPolicyStoreClient implements PolicyStoreClient {
     hasData.countDown();
   }
 
+  /**
+   * R371: a path this store never wrote is an error, not an empty answer.
+   *
+   * <p>The mock stands in for a real engine in a deployment that has no engine, and a test that
+   * asks for a document it never wrote has a mistake in it. Answering nothing hides the mistake
+   * inside whatever asserts on the result.
+   */
   @Override
   public synchronized void deletePolicyData(String path, String transactionId) {
     if (path == null || path.isEmpty()) {
       data.removeAll();
     } else {
+      requirePresent(path);
       data.remove(path);
     }
   }
@@ -100,12 +108,19 @@ public final class MockPolicyStoreClient implements PolicyStoreClient {
     if (path == null || path.isEmpty()) {
       return data;
     }
+    requirePresent(path);
     return data.get(path);
   }
 
+  private void requirePresent(String path) {
+    if (!data.has(path)) {
+      throw new java.util.NoSuchElementException(path);
+    }
+  }
+
   @Override
-  public JsonNode getDataWithInput(String path, JsonNode input) {
-    return MAPPER.createObjectNode();
+  public Proxied getDataWithInput(String path, JsonNode input) {
+    return new Proxied(200, java.util.Map.of(), "{}");
   }
 
   @Override

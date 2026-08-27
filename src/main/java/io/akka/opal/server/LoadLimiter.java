@@ -27,11 +27,19 @@ public final class LoadLimiter {
   private static final Pattern NOTATION =
       Pattern.compile(
           "^\\s*(\\d+)\\s*(?:per|/)\\s*(\\d+)?\\s*"
-              + "(second|sec|s|minute|min|m|hour|h|day|d)s?\\s*$",
+              + "(second|sec|s|minute|min|m|hour|h|day|d|month|year|y)s?\\s*$",
           Pattern.CASE_INSENSITIVE);
 
   private final int limit;
   private final Duration window;
+
+  /**
+   * The limit as its library spells it — {@code "10 per 1 second"}.
+   *
+   * <p>This reaches a caller: it is the whole body of the 429, so an abbreviation written in the
+   * configuration is expanded here the same way.
+   */
+  private String canonical = "";
   private final Deque<Long> hits = new ArrayDeque<>();
 
   public LoadLimiter(String notation) {
@@ -40,7 +48,11 @@ public final class LoadLimiter {
       this.window = Duration.ZERO;
       return;
     }
-    Matcher matcher = NOTATION.matcher(notation);
+    // R280: several limits may be written on one line, separated by a semicolon, a comma or a
+    // bar. The library underneath the source returns the first of them from a single parse, and
+    // the route the notation configures reads exactly one, so the rest are declared and unused.
+    String first = notation.split("[;|,]", 2)[0];
+    Matcher matcher = NOTATION.matcher(first);
     if (!matcher.matches()) {
       throw new IllegalArgumentException("could not read a rate limit from: " + notation);
     }
@@ -51,13 +63,32 @@ public final class LoadLimiter {
           case "second", "sec", "s" -> Duration.ofSeconds(multiple);
           case "minute", "min", "m" -> Duration.ofMinutes(multiple);
           case "hour", "h" -> Duration.ofHours(multiple);
+          case "month" -> Duration.ofDays(30 * multiple);
+          case "year", "y" -> Duration.ofDays(365 * multiple);
           default -> Duration.ofDays(multiple);
         };
+    this.canonical = matcher.group(1) + " per " + multiple + " " + unitName(matcher.group(3));
     log.info("rate limiting is on, configured limit: {}", notation);
   }
 
   public boolean enabled() {
     return limit > 0;
+  }
+
+  /** What the 429 says. */
+  public String canonicalNotation() {
+    return canonical;
+  }
+
+  private static String unitName(String unit) {
+    return switch (unit.toLowerCase(Locale.ROOT)) {
+      case "second", "sec", "s" -> "second";
+      case "minute", "min", "m" -> "minute";
+      case "hour", "h" -> "hour";
+      case "day", "d" -> "day";
+      case "month" -> "month";
+      default -> "year";
+    };
   }
 
   /** True when the caller is inside the limit; false is the 429. */

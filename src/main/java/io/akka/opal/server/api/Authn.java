@@ -23,9 +23,24 @@ public final class Authn {
         .orElse(null);
   }
 
+  /**
+   * R375: a refusal is logged with its reason and without the token.
+   *
+   * <p>Every route answers the same 401 body, so from outside a bad signature, an expired token
+   * and a subject that is not a uuid are one answer. The reason is the only thing that tells an
+   * operator which of them happened, and the token itself is dropped from the line because a
+   * log is not where a credential belongs.
+   */
   public static Map<String, Object> requireLoggedIn(JwtVerifier verifier, RequestContext context) {
-    return verifier.verifyLoggedIn(bearerToken(context));
+    try {
+      return verifier.verifyLoggedIn(bearerToken(context));
+    } catch (Unauthorized e) {
+      LOG.error("Authentication failed with 401 due to error: {}", e.body());
+      throw e;
+    }
   }
+
+  private static final org.slf4j.Logger LOG = org.slf4j.LoggerFactory.getLogger(Authn.class);
 
   /** R72: the master token as a static credential; with none configured the route is open. */
   public static void requireMasterToken(String masterToken, RequestContext context) {
@@ -39,7 +54,9 @@ public final class Authn {
     }
     String token = JwtVerifier.tokenFromHeader(header);
     if (token == null || !token.equals(masterToken)) {
-      throw new Unauthorized("unauthorized to access this endpoint!", token);
+      Unauthorized refused = new Unauthorized("unauthorized to access this endpoint!", token);
+      LOG.error("Authentication failed with 401 due to error: {}", refused.body());
+      throw refused;
     }
   }
 }

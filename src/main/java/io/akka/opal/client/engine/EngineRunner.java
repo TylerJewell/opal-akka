@@ -159,43 +159,23 @@ public abstract class EngineRunner implements AutoCloseable {
     if (pipedLogsFormat == EngineLogFormat.NONE) {
       builder.redirectOutput(ProcessBuilder.Redirect.DISCARD);
       builder.redirectError(ProcessBuilder.Redirect.DISCARD);
-    } else {
-      builder.redirectErrorStream(true);
     }
     process = builder.start();
 
     if (pipedLogsFormat != EngineLogFormat.NONE) {
-      Thread piper =
-          new Thread(
-              () -> {
-                try (BufferedReader reader =
-                    new BufferedReader(
-                        new InputStreamReader(process.getInputStream(), StandardCharsets.UTF_8))) {
-                  String line;
-                  while ((line = reader.readLine()) != null) {
-                    boolean panicked = handleLogLine(line);
-                    if (panicked && !enginePanicked) {
-                      enginePanicked = true;
-                      terminateEngine();
-                    }
-                  }
-                } catch (Exception e) {
-                  log.debug("engine log pipe closed: {}", e.toString());
-                }
-              },
-              "opal-engine-logs");
-      piper.setDaemon(true);
-      piper.start();
+      // R364: the two streams are read independently. Merged, a long line on one can be cut in
+      // half by a line on the other, and the halves are then two lines that parse as neither —
+      // which is how a panic trace stops matching the marker that terminates the engine.
+      pipe(process.getInputStream(), "opal-engine-logs");
+      pipe(process.getErrorStream(), "opal-engine-errors");
     }
 
-    waitForHealth();
-    engineReady.countDown();
-    if (neverUpBefore) {
-      neverUpBefore = false;
-      onInitialStart.forEach(Runnable::run);
-    } else {
-      onRestart.forEach(Runnable::run);
-    }
+    // R299: the health wait runs beside the engine, not in front of it. A failed wait leaves
+    // the engine running and the readiness latch closed; it does not tear the process down and
+    // start another, because an engine that is slow to answer is not an engine that failed.
+    Thread health = new Thread(this::waitForHealthThenRunCallbacks, "opal-engine-health");
+    health.setDaemon(true);
+    health.start();
 
     int exitCode = process.waitFor();
     if (enginePanicked) {
@@ -207,18 +187,53 @@ public abstract class EngineRunner implements AutoCloseable {
     }
   }
 
+  private void waitForHealthThenRunCallbacks() {
+    try {
+      waitForHealth();
+    } catch (RuntimeException e) {
+      log.error("Engine failed health check: {}", e.getMessage());
+      return;
+    }
+    engineReady.countDown();
+    // R300: a second before the callbacks, which is what the source waits for the engine's own
+    // API to be answering rather than merely listening.
+    try {
+      Thread.sleep(1000);
+    } catch (InterruptedException e) {
+      Thread.currentThread().interrupt();
+      return;
+    }
+    if (neverUpBefore) {
+      neverUpBefore = false;
+      log.info("Running policy engine initial start callbacks");
+      onInitialStart.forEach(Runnable::run);
+    } else {
+      log.info("Running policy engine rehydration callbacks");
+      onRestart.forEach(Runnable::run);
+    }
+  }
+
+  /**
+   * R301: thirty probes with a wait that doubles from a tenth of a second to two.
+   *
+   * <p>About fifty seconds in all, which is the window the source gives an engine to answer. A
+   * fixed spacing reaches its last probe sooner and calls a slow engine unhealthy.
+   */
   private void waitForHealth() {
-    for (int attempt = 0; attempt < 60; attempt++) {
+    long waitMillis = 100;
+    for (int attempt = 0; attempt < 30; attempt++) {
+      log.debug("Checking policy engine health...");
       if (healthCheck()) {
         log.info("Policy engine is healthy and ready");
         return;
       }
       try {
-        Thread.sleep(500);
+        Thread.sleep(waitMillis);
       } catch (InterruptedException e) {
         Thread.currentThread().interrupt();
         return;
       }
+      waitMillis = Math.min(2000, waitMillis * 2);
     }
     throw new IllegalStateException("Policy engine not healthy yet");
   }
@@ -231,8 +246,39 @@ public abstract class EngineRunner implements AutoCloseable {
    * necessarily exit — it can sit there holding its port — so the runner terminates it itself
    * and keeps reading, which is what puts the whole stack trace in the log before it dies.
    */
+  private void pipe(java.io.InputStream stream, String name) {
+    Thread piper =
+        new Thread(
+            () -> {
+              try (BufferedReader reader =
+                  new BufferedReader(new InputStreamReader(stream, StandardCharsets.UTF_8))) {
+                String line;
+                while ((line = reader.readLine()) != null) {
+                  boolean panicked = handleLogLine(line);
+                  if (panicked && !enginePanicked) {
+                    enginePanicked = true;
+                    terminateEngine();
+                  }
+                }
+              } catch (Exception e) {
+                log.debug("engine log pipe closed: {}", e.toString());
+              }
+            },
+            name);
+    piper.setDaemon(true);
+    piper.start();
+  }
+
+  /** R363: whether the rendered line is coloured, which follows the log configuration. */
+  private volatile boolean colorize;
+
+  public EngineRunner withColorize(boolean value) {
+    this.colorize = value;
+    return this;
+  }
+
   protected boolean handleLogLine(String line) {
-    EngineLogLine.Rendered rendered = EngineLogLine.render(line, pipedLogsFormat);
+    EngineLogLine.Rendered rendered = EngineLogLine.render(line, pipedLogsFormat, colorize);
     if (rendered != null) {
       switch (EngineLogLine.severity(rendered.level())) {
         case "ERROR" -> log.error("{}", rendered.text());
@@ -260,16 +306,15 @@ public abstract class EngineRunner implements AutoCloseable {
       return;
     }
     log.info("Stopping policy engine");
+    // R303: asked to stop, and not forced. The source signals the process group once and waits a
+    // second; it never escalates, so an engine that ignores the signal keeps running and the
+    // caller sees that rather than a kill it did not ask for.
     running.descendants().forEach(ProcessHandle::destroy);
     running.destroy();
     try {
-      if (!running.waitFor(5, TimeUnit.SECONDS)) {
-        running.descendants().forEach(ProcessHandle::destroyForcibly);
-        running.destroyForcibly();
-      }
+      running.waitFor(1, TimeUnit.SECONDS);
     } catch (InterruptedException e) {
       Thread.currentThread().interrupt();
-      running.destroyForcibly();
     }
   }
 

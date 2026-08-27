@@ -26,7 +26,9 @@ public final class Data {
       String dst_path,
       String save_method,
       Object data,
-      Double periodic_update_interval)
+      // The source keeps this on a subclass of its own, so an entry without one carries no such
+      // key on the wire and an entry with one does.
+      @JsonInclude(JsonInclude.Include.NON_NULL) Double periodic_update_interval)
       implements io.akka.opal.common.util.Repr.Reprable {
 
     public DataSourceEntry {
@@ -122,6 +124,9 @@ public final class Data {
       implements io.akka.opal.common.util.Repr.Reprable {
 
     public ServerDataSourceConfig {
+      if (external_source_url != null) {
+        Schemas.requireHttpUrl(external_source_url, "external_source_url");
+      }
       if (config == null && external_source_url == null) {
         throw new Schemas.ValidationFailure(
             "you must provide one of these fields: config, external_source_url");

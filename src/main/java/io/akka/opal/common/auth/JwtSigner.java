@@ -75,9 +75,16 @@ public final class JwtSigner extends JwtVerifier {
         }
       } catch (InvalidJWTCryptoKeys e) {
         throw e;
-      } catch (Exception e) {
+      } catch (java.text.ParseException | com.nimbusds.jose.JOSEException e) {
+        // R374: only a failure of the token itself reads as a mismatched pair. A key the library
+        // could not load, or an algorithm it does not have, is a different fault and saying
+        // "these two keys do not match" about it sends an operator to regenerate a good pair.
         log.info("JWT Signer key verification failed with error: {}", e.toString());
         throw new InvalidJWTCryptoKeys("private key and public key do not match!");
+      } catch (RuntimeException e) {
+        throw e;
+      } catch (Exception e) {
+        throw new IllegalStateException(e);
       }
     } else if (!hasPrivate && hasPublic) {
       throw new IllegalArgumentException(

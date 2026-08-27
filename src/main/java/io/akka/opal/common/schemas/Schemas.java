@@ -18,4 +18,26 @@ public final class Schemas {
       super(message);
     }
   }
+
+  /**
+   * R269: a field the source types as an http url, checked the way its schema library checks one.
+   *
+   * <p>A scheme of {@code http} or {@code https} and a host. The two messages are the library's
+   * own, because they reach a caller as the body of a 422.
+   */
+  public static void requireHttpUrl(String value, String field) {
+    java.net.URI parsed;
+    try {
+      parsed = new java.net.URI(value);
+    } catch (java.net.URISyntaxException e) {
+      throw new ValidationFailure(field + ": invalid or missing URL scheme");
+    }
+    String scheme = parsed.getScheme();
+    if (scheme == null || !(scheme.equals("http") || scheme.equals("https"))) {
+      throw new ValidationFailure(field + ": invalid or missing URL scheme");
+    }
+    if (parsed.getHost() == null || parsed.getHost().isEmpty()) {
+      throw new ValidationFailure(field + ": URL host invalid");
+    }
+  }
 }

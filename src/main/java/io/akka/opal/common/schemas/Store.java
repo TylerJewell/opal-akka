@@ -16,7 +16,19 @@ public final class Store {
 
   @JsonIgnoreProperties(ignoreUnknown = true)
   @JsonInclude(JsonInclude.Include.ALWAYS)
-  public record RemoteStatus(String remote_url, boolean succeed, String error) {}
+  /**
+   * One remote a transaction touched.
+   *
+   * <p>{@code succeed} is boxed because its default is <em>true</em>: a report that omits the
+   * field is a report of success, and a primitive cannot tell an omitted field from a false one.
+   */
+  public record RemoteStatus(String remote_url, Boolean succeed, String error) {
+    public RemoteStatus {
+      if (succeed == null) {
+        succeed = Boolean.TRUE;
+      }
+    }
+  }
 
   @JsonIgnoreProperties(ignoreUnknown = true)
   @JsonInclude(JsonInclude.Include.ALWAYS)
@@ -28,7 +40,15 @@ public final class Store {
       String error,
       String creation_time,
       String end_time,
-      List<RemoteStatus> remotes_status) {}
+      List<RemoteStatus> remotes_status) {
+
+    /** The source defaults the error to the empty string, and only the remotes carry a null one. */
+    public StoreTransaction {
+      if (error == null) {
+        error = "";
+      }
+    }
+  }
 
   /**
    * One RFC-6902 operation — SPEC-002 R143.

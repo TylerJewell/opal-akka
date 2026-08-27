@@ -75,8 +75,13 @@ public final class PolicySource {
       String branch) {
 
     public GitPolicyScopeSource {
+      // Required in the source, so a scope posted without it is a 422 rather than a git scope
+      // by assumption.
       if (source_type == null) {
-        source_type = "git";
+        throw new Schemas.ValidationFailure("source_type: field required");
+      }
+      if (url == null) {
+        throw new Schemas.ValidationFailure("url: field required");
       }
       if (auth == null) {
         auth = NoAuthData.get();

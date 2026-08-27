@@ -41,6 +41,15 @@
             <artifactId>nimbus-jose-jwt</artifactId>
             <version>9.41.2</version>
         </dependency>
+        <!--
+          Ed25519 signing and verification. nimbus-jose-jwt leaves this optional, so an
+          `AUTH_JWT_ALGORITHM` of EdDSA parses a key and then fails at the signature without it.
+        -->
+        <dependency>
+            <groupId>com.google.crypto.tink</groupId>
+            <artifactId>tink</artifactId>
+            <version>1.15.0</version>
+        </dependency>
         <!-- PEM, OpenSSH and DER key parsing, which the JDK does not do on its own. -->
         <dependency>
             <groupId>org.bouncycastle</groupId>
@@ -90,6 +99,15 @@
                         <exclude>**/*IntegrationTest.java</exclude>
                     </excludes>
                 </configuration>
+            </plugin>
+            <!--
+              Running the service from a checkout. The parent manages the goal's configuration -
+              the runtime's main class, dev mode, and the logging it uses - and declaring the
+              plugin here is what makes `mvn compile exec:java` pick that configuration up.
+            -->
+            <plugin>
+                <groupId>org.codehaus.mojo</groupId>
+                <artifactId>exec-maven-plugin</artifactId>
             </plugin>
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>

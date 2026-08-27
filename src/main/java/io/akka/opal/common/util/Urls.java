@@ -47,40 +47,39 @@ public final class Urls {
     if (url == null || url.isEmpty()) {
       return url;
     }
-    URI parts;
-    try {
-      parts = new URI(url);
-    } catch (Exception e) {
-      return url;
-    }
-    if (parts.getScheme() == null) {
+    // Split the permissive way rather than through the platform's URI type. That type refuses a
+    // host holding an underscore outright, and a redaction that gives up on one hands the
+    // credentials it was asked to remove straight to a log.
+    PyUrl parts = PyUrl.split(url);
+    if (parts.scheme() == null || parts.scheme().isEmpty()) {
       return url;
     }
 
     boolean changed = false;
-    String authority = parts.getRawAuthority();
-    String userInfo = parts.getRawUserInfo();
-    if (userInfo != null && !userInfo.isEmpty()) {
-      String host = parts.getHost() == null ? "" : parts.getHost();
-      if (parts.getPort() >= 0) {
-        host = host + ":" + parts.getPort();
+    String authority = parts.netloc();
+    if (authority != null && authority.contains("@")) {
+      String hostAndPort = authority.substring(authority.lastIndexOf('@') + 1);
+      if (portOutOfRange(hostAndPort)) {
+        // Never throw from a log path: an unreadable authority is returned as it arrived, the
+        // way the source's own lazy parse bails out.
+        return url;
       }
-      authority = "***@" + host;
+      authority = "***@" + hostAndPort;
       changed = true;
     }
 
-    String[] query = maskSensitiveParams(parts.getRawQuery());
-    String[] fragment = maskSensitiveParams(parts.getRawFragment());
+    String[] query = maskSensitiveParams(parts.query());
+    String[] fragment = maskSensitiveParams(parts.fragment());
     changed = changed || query[1] != null || fragment[1] != null;
     if (!changed) {
       return url;
     }
-    StringBuilder out = new StringBuilder(parts.getScheme()).append("://");
+    StringBuilder out = new StringBuilder(parts.scheme()).append("://");
     if (authority != null) {
       out.append(authority);
     }
-    if (parts.getRawPath() != null) {
-      out.append(parts.getRawPath());
+    if (parts.path() != null) {
+      out.append(parts.path());
     }
     if (query[0] != null && !query[0].isEmpty()) {
       out.append('?').append(query[0]);
@@ -89,6 +88,29 @@ public final class Urls {
       out.append('#').append(fragment[0]);
     }
     return out.toString();
+  }
+
+  /** Whether the trailing {@code :digits} of an authority names a port no socket can carry. */
+  private static boolean portOutOfRange(String hostAndPort) {
+    int colon = hostAndPort.lastIndexOf(':');
+    if (colon < 0 || colon < hostAndPort.lastIndexOf(']')) {
+      return false;
+    }
+    String port = hostAndPort.substring(colon + 1);
+    if (port.isEmpty()) {
+      return false;
+    }
+    for (int i = 0; i < port.length(); i++) {
+      if (!Character.isDigit(port.charAt(i))) {
+        return true;
+      }
+    }
+    try {
+      int value = Integer.parseInt(port);
+      return value < 0 || value > 65535;
+    } catch (NumberFormatException e) {
+      return true;
+    }
   }
 
   /** Returns the rewritten component and, in the second slot, a marker when it changed. */

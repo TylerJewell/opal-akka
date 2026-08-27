@@ -14,6 +14,7 @@ import io.akka.opal.common.monitoring.Apm;
 import io.akka.opal.common.monitoring.Span;
 import io.akka.opal.common.schemas.Data;
 import io.akka.opal.common.schemas.Policy;
+import io.akka.opal.common.schemas.Scopes;
 import io.akka.opal.common.sync.NamedLock;
 import io.akka.opal.common.sources.ApiPolicySource;
 import io.akka.opal.common.sources.GitPolicySource;
@@ -130,7 +131,12 @@ public final class ServerRuntime {
               Double.parseDouble(server.getString("BROADCAST_RESYNC_SETTLE_SECONDS")),
               Boolean.TRUE.equals(server.get("BROADCAST_RESYNC_ON_RECONNECT"))));
       broadcaster.setOnReconnect(this::resyncAfterBackboneGap);
-      broadcaster.setOnGiveUp(this::gracefulShutdown);
+      // R322: only a reconnecting broadcaster gives up, so only one has the hook. A broadcaster
+      // with reconnection turned off ends its session on the first drop, and ending the process
+      // for that would turn one backbone blip into a restart the source does not perform.
+      if (Boolean.TRUE.equals(server.get("BROADCAST_RECONNECT_ENABLED"))) {
+        broadcaster.setOnGiveUp(this::gracefulShutdown);
+      }
     }
     this.scopes = new ScopeRepository(componentClient);
     GitOps.configure(
@@ -163,7 +169,18 @@ public final class ServerRuntime {
             : null;
     this.loadLimiter = new LoadLimiter(server.getString("CLIENT_LOAD_LIMIT_NOTATION"));
 
-    this.freezeOnDisconnect = Boolean.TRUE.equals(server.get("BROADCAST_FREEZE_ON_DISCONNECT"));
+    // R282: a freeze with no resync has no way back. The freeze drops what a client would have
+    // been sent during a backbone gap, and the resync on reconnect is the only thing that makes
+    // the client ask again — so the source refuses the pair and turns the freeze off rather than
+    // dropping updates nothing will replace.
+    boolean freezeRequested = Boolean.TRUE.equals(server.get("BROADCAST_FREEZE_ON_DISCONNECT"));
+    if (freezeRequested && !Boolean.TRUE.equals(server.get("BROADCAST_RESYNC_ON_RECONNECT"))) {
+      log.warn(
+          "BROADCAST_FREEZE_ON_DISCONNECT is on with BROADCAST_RESYNC_ON_RECONNECT off; the"
+              + " resync is the freeze's only recovery path, so the freeze is disabled");
+      freezeRequested = false;
+    }
+    this.freezeOnDisconnect = freezeRequested;
     this.freezeExemptTopics =
         Set.of(
             common.getString("STATISTICS_ADD_CLIENT_CHANNEL"),
@@ -173,6 +190,8 @@ public final class ServerRuntime {
             server.getString("STATISTICS_SERVER_KEEPALIVE_CHANNEL"),
             server.getString("BROADCAST_KEEPALIVE_TOPIC"),
             POLICY_REPO_WEBHOOK_TOPIC);
+    // R327: written once, when the server starts, rather than on the first request for it.
+    io.akka.opal.server.api.Jwks.write(this);
     installChannelRestrictions();
     wireInternalSubscriptions();
     if (broadcaster != null) {
@@ -182,6 +201,26 @@ public final class ServerRuntime {
       statistics.startKeepalive(server.getString("STATISTICS_SERVER_KEEPALIVE_CHANNEL"));
       // R215: and ask the fleet what it already knows, rather than starting blind.
       statistics.requestFleetState(server.getString("STATISTICS_WAKEUP_CHANNEL"));
+      if (broadcaster != null) {
+        // R337: fleet statistics are assembled from what arrives on the backbone, so a worker
+        // whose reader has ended holds a picture that only goes further out of date. Ending the
+        // process is what lets a supervisor put a reading worker in its place.
+        broadcaster.setOnReaderEnded(
+            () -> gracefulShutdown("the broadcast reader ended and statistics are enabled"));
+      }
+    }
+  }
+
+  /**
+   * R285: the keepalive belongs to the leader, not to every process.
+   *
+   * <p>The source starts it inside the leadership lock, so one worker per machine emits it. Every
+   * worker emitting one multiplies the backbone traffic and every peer's delivery by the number
+   * of workers, which is a difference a subscriber sees.
+   */
+  private void startBroadcastKeepalive() {
+    if (broadcastKeepalive != null) {
+      return;
     }
     broadcastKeepalive =
         BroadcastKeepalive.start(
@@ -265,7 +304,7 @@ public final class ServerRuntime {
   }
 
   public String version() {
-    return "0.0.0";
+    return io.akka.opal.common.util.Version.current();
   }
 
   private int workerCount() {
@@ -336,11 +375,50 @@ public final class ServerRuntime {
     notifier.subscribe(serverId, topics, this::onInternalNotification, null);
   }
 
+  /** Where a webhook-triggered pull runs, off the thread the notification arrived on. */
+  private final java.util.concurrent.ExecutorService webhookTriggers =
+      java.util.concurrent.Executors.newSingleThreadExecutor(
+          runnable -> {
+            Thread thread = new Thread(runnable, "opal-webhook-trigger");
+            thread.setDaemon(true);
+            return thread;
+          });
+
   private void onInternalNotification(EventNotifier.Subscription subscription, Object data) {
     String topic = subscription.topic();
     if (topic.equals(POLICY_REPO_WEBHOOK_TOPIC)) {
-      checkPolicySourceForChanges();
-      scopesService.syncAllScopes();
+      // R310: the trigger runs off the delivery thread. Deliveries are serial, so a pull that
+      // waits on somebody else's git host would otherwise hold up every other subscriber on
+      // this publication.
+      JsonNode payload = asJson(data);
+      webhookTriggers.execute(
+          () -> {
+            try {
+              checkPolicySourceForChanges();
+              // R311: a payload naming one scope syncs that scope. Syncing everything instead
+              // fetches every tenant's repository because one tenant pushed, and loses the
+              // hinted hash the publisher sent with it.
+              if (payload != null && payload.isObject() && payload.has("scope_id")) {
+                String scopeId = payload.path("scope_id").asText(null);
+                if (scopeId == null) {
+                  log.warn("Got invalid keyword args for single scope refresh: {}", payload);
+                  return;
+                }
+                boolean forceFetch = payload.path("force_fetch").asBoolean(false);
+                String hintedHash =
+                    payload.hasNonNull("hinted_hash") ? payload.get("hinted_hash").asText() : null;
+                scopesService
+                    .findScope(scopeId)
+                    .ifPresentOrElse(
+                        scope -> scopesService.refreshScope(scope, forceFetch ? null : hintedHash),
+                        () -> log.warn("Got a refresh for a scope that is gone: {}", scopeId));
+                return;
+              }
+              scopesService.syncAllScopes();
+            } catch (RuntimeException e) {
+              log.error("policy watcher trigger failed: {}", e.toString());
+            }
+          });
       return;
     }
     if (topic.equals(server.getString("SCOPES_PURGE_CHANNEL"))) {
@@ -472,7 +550,18 @@ public final class ServerRuntime {
    * and a process that stays up with a dead reader holds clients that will never hear anything.
    */
   void gracefulShutdown() {
-    log.error("Broadcaster gave up reconnecting; stopping this process so it can be restarted");
+    gracefulShutdown("Broadcaster gave up reconnecting");
+  }
+
+  /**
+   * Ends this process so whatever supervises it starts another, naming why.
+   *
+   * <p>The source reaches this from two places — a backbone reader that gave up and a policy
+   * watcher that failed — and both send the process a termination signal rather than trying to
+   * carry on without the thing that failed.
+   */
+  void gracefulShutdown(String reason) {
+    log.error("{}; stopping this process so it can be restarted", reason);
     new Thread(
             () -> {
               try {
@@ -491,7 +580,12 @@ public final class ServerRuntime {
 
   /** R214: whether the backbone reader is well enough for this replica to be ready. */
   public boolean isBroadcasterHealthy() {
-    if (broadcaster == null || !Boolean.TRUE.equals(server.get("BROADCAST_HEALTHCHECK_ENABLED"))) {
+    // R322: the probe degrades only for a reconnecting broadcaster. One that does not reconnect
+    // has no recovery to be waiting on, and reporting it unhealthy takes a worker out of a load
+    // balancer for a condition it will never leave.
+    if (broadcaster == null
+        || !Boolean.TRUE.equals(server.get("BROADCAST_HEALTHCHECK_ENABLED"))
+        || !Boolean.TRUE.equals(server.get("BROADCAST_RECONNECT_ENABLED"))) {
       return true;
     }
     boolean healthy = broadcaster.isReaderHealthy();
@@ -508,6 +602,11 @@ public final class ServerRuntime {
 
   public void publish(String topic) {
     publish(List.of(topic), null);
+  }
+
+  /** One topic with a payload, which the scope routes use to ask the fleet to sync one scope. */
+  public void publish(String topic, Object data) {
+    publish(List.of(topic), data);
   }
 
   private void publishObject(String topic, Object data) {
@@ -556,12 +655,25 @@ public final class ServerRuntime {
           "another process holds the leadership lock ({}), the policy watcher will not run here",
           server.getString("LEADER_LOCK_FILE_PATH"));
       leadershipLock = null;
+      // R288: the source blocks on the lock, so a worker whose leader dies takes over. Blocking
+      // here would hold up everything else this process runs, since this process is not one of
+      // several identical workers — it is the whole service. Asking again on a timer reaches the
+      // same place: the lock a dead leader held is free, and the next ask takes it.
+      scheduleLeadershipRetry();
       return;
     }
     log.info("leadership lock acquired, leader pid: {}", ProcessHandle.current().pid());
+    if (leadershipRetry != null) {
+      leadershipRetry.cancel(false);
+      leadershipRetry = null;
+    }
     if (Boolean.TRUE.equals(server.get("SCOPES"))) {
+      // R286: the leader writes the scope the environment describes before it polls, so a
+      // deployment configured the way a single-tenant one is has a scope to serve.
+      scopesService.loadScopes(defaultScopeFromConfiguration());
       startScopePolling();
     }
+    startBroadcastKeepalive();
     PolicySourceTypes type = server.get("POLICY_SOURCE_TYPE");
     // R190: the clone directory is found rather than assumed, so a run that did not create it
     // still reads the one that is there, and a run that did leaves no earlier clone behind.
@@ -574,11 +686,15 @@ public final class ServerRuntime {
             .toString();
     log.info("Policy repo will be cloned to: {}", clonePath);
     PolicySource source;
+    try {
     if (type == PolicySourceTypes.Api) {
       String bundleUrl = server.getString("POLICY_BUNDLE_URL");
+      // R283: an unset url is a misconfiguration rather than a way to turn the watcher off —
+      // REPO_WATCHER_ENABLED is that. The source warns and builds the source anyway, whose first
+      // run fails and ends the process, so a deployment that forgot the url is told loudly
+      // rather than serving no policy quietly.
       if (bundleUrl == null || bundleUrl.isEmpty()) {
-        log.info("no POLICY_BUNDLE_URL configured, the policy watcher is off");
-        return;
+        log.warn("POLICY_BUNDLE_URL is unset but policy watcher is enabled! disabling watcher.");
       }
       source =
           new ApiPolicySource(
@@ -594,8 +710,7 @@ public final class ServerRuntime {
     } else {
       String repoUrl = server.getString("POLICY_REPO_URL");
       if (repoUrl == null || repoUrl.isEmpty()) {
-        log.info("no POLICY_REPO_URL configured, the policy watcher is off");
-        return;
+        log.warn("POLICY_REPO_URL is unset but repo watcher is enabled! disabling watcher.");
       }
       source =
           new GitPolicySource(
@@ -606,17 +721,113 @@ public final class ServerRuntime {
               (Integer) server.get("POLICY_REPO_POLLING_INTERVAL"),
               (Integer) server.get("POLICY_REPO_CLONE_TIMEOUT"));
     }
+    } catch (RuntimeException e) {
+      // R283: the source builds its watcher inside the leadership lock, so a watcher that cannot
+      // be built at all leaves the lock released and the rest of the server serving — the clone
+      // on disk still answers the bundle routes, and nothing else this process does depends on
+      // the watcher.
+      log.error("could not start the policy watcher: {}", e.getMessage());
+      releaseLeadership();
+      return;
+    }
     source.addOnNewPolicyCallback(this::onNewPolicy);
     // R265: a git failure names the remote it could not reach, and a remote can carry a token in
     // its own URL. The message is scrubbed before it reaches a log, whoever wrote it.
     String sourceUrl = server.getString("POLICY_REPO_URL");
     source.addOnFailureCallback(
-        exception ->
-            log.error(
-                "policy source failed: {}",
-                io.akka.opal.common.util.Urls.redactUrlInText(exception.toString(), sourceUrl)));
+        exception -> {
+          log.error(
+              "policy watcher failed with exception: {}",
+              io.akka.opal.common.util.Urls.redactUrlInText(exception.toString(), sourceUrl));
+          // R284: the watcher is not something the process can run without. A server whose clone
+          // permanently fails would otherwise stay up with a dead watcher and no signal to
+          // whatever supervises it.
+          policySource.set(null);
+          gracefulShutdown("The policy watcher failed");
+        });
     policySource.set(source);
-    source.run();
+    // R321: on a thread of its own. The first fetch is retried until it succeeds, so running it
+    // here would hold up the rest of the service's start-up for as long as a repository or a
+    // bundle server is unreachable — which the source does not, because its watcher is a task
+    // beside the application rather than a step inside its construction.
+    Thread start = new Thread(source::run, "opal-policy-source-start");
+    start.setDaemon(true);
+    start.start();
+  }
+
+  /**
+   * R286: the scope OPAL's own single-repository configuration describes, or null when there is
+   * no repository url to build one from.
+   *
+   * <p>Its id is {@code default}, which is the id the bundle route falls back to when a caller
+   * names a scope that does not exist.
+   */
+  Scopes.Scope defaultScopeFromConfiguration() {
+    String repoUrl = server.getString("POLICY_REPO_URL");
+    if (repoUrl == null || repoUrl.isEmpty()) {
+      return null;
+    }
+    io.akka.opal.common.schemas.PolicySource.AuthData auth =
+        io.akka.opal.common.schemas.PolicySource.NoAuthData.get();
+    String sshKey = server.getString("POLICY_REPO_SSH_KEY");
+    if (sshKey != null && !sshKey.isEmpty()) {
+      String privateKey = io.akka.opal.common.confi.Keys.maybeDecodeMultiline(sshKey);
+      auth = new io.akka.opal.common.schemas.PolicySource.SSHAuthData(
+          "ssh", "git", null, privateKey);
+    }
+    PolicySourceTypes type = server.get("POLICY_SOURCE_TYPE");
+    return new Scopes.Scope(
+        "default",
+        new io.akka.opal.common.schemas.PolicySource.GitPolicyScopeSource(
+            type.name().toLowerCase(java.util.Locale.ROOT),
+            repoUrl,
+            auth,
+            null,
+            null,
+            null,
+            server.getString("POLICY_REPO_MANIFEST_PATH"),
+            null,
+            server.getString("POLICY_REPO_MAIN_BRANCH")),
+        null);
+  }
+
+  /** Where the retries that wait for the leadership lock run. */
+  private final java.util.concurrent.ScheduledExecutorService leadership =
+      java.util.concurrent.Executors.newSingleThreadScheduledExecutor(
+          runnable -> {
+            Thread thread = new Thread(runnable, "opal-leadership");
+            thread.setDaemon(true);
+            return thread;
+          });
+
+  private volatile java.util.concurrent.ScheduledFuture<?> leadershipRetry;
+
+  private void scheduleLeadershipRetry() {
+    if (leadershipRetry != null) {
+      return;
+    }
+    // Not a configuration entry: the source has none, because it blocks on the lock instead.
+    long seconds = 5;
+    leadershipRetry =
+        leadership.scheduleWithFixedDelay(
+            () -> {
+              try {
+                startPolicySource();
+              } catch (RuntimeException e) {
+                log.error("could not take leadership: {}", e.toString());
+              }
+            },
+            seconds,
+            seconds,
+            java.util.concurrent.TimeUnit.SECONDS);
+  }
+
+  /** Gives the leadership lock up, so another process can take the watcher on. */
+  private void releaseLeadership() {
+    if (leadershipLock != null) {
+      leadershipLock.close();
+      leadershipLock = null;
+    }
   }
 
   public void checkPolicySourceForChanges() {
@@ -660,6 +871,25 @@ public final class ServerRuntime {
     }
   }
 
+  /** The shape the source logs each published entry in. */
+  private static List<java.util.Map<String, Object>> loggedEntries(
+      List<Data.DataSourceEntry> entries) {
+    List<java.util.Map<String, Object>> logged = new ArrayList<>();
+    if (entries == null) {
+      return logged;
+    }
+    for (Data.DataSourceEntry entry : entries) {
+      java.util.LinkedHashMap<String, Object> row = new java.util.LinkedHashMap<>();
+      row.put("url", io.akka.opal.common.util.Urls.redactUrl(entry.url()));
+      row.put("method", entry.save_method());
+      row.put("path", entry.dst_path() == null || entry.dst_path().isEmpty() ? "/" : entry.dst_path());
+      row.put("inline_data", entry.data() != null);
+      row.put("topics", entry.topics());
+      logged.add(row);
+    }
+    return logged;
+  }
+
   public Repository repository() {
     PolicySource source = policySource.get();
     if (source instanceof GitPolicySource git) {
@@ -671,8 +901,47 @@ public final class ServerRuntime {
     return null;
   }
 
+  /**
+   * R281: the clone on disk, whether or not this process is the one that pulls into it.
+   *
+   * <p>The bundle routes resolve the clone directory per request rather than reading the running
+   * watcher's handle. Two deployments depend on that: one with {@code REPO_WATCHER_ENABLED} off,
+   * which serves bundles and pulls nothing, and every process that lost the leadership lock —
+   * both have a clone on disk and no source object, and both are expected to answer.
+   *
+   * <p>Returns null when there is no clone directory or it holds no {@code .git}, which the
+   * routes report as {@code policy repo was not found}.
+   */
+  public Repository repositoryOnDisk() {
+    Repository running = repository();
+    if (running != null) {
+      return running;
+    }
+    java.nio.file.Path clonePath =
+        new ClonePathFinder(
+                server.getString("POLICY_REPO_CLONE_PATH"),
+                server.getString("POLICY_REPO_CLONE_FOLDER_PREFIX"),
+                Boolean.TRUE.equals(server.get("POLICY_REPO_REUSE_CLONE_PATH")))
+            .clonePath();
+    if (clonePath == null || !java.nio.file.Files.exists(clonePath.resolve(".git"))) {
+      return null;
+    }
+    try {
+      return new org.eclipse.jgit.storage.file.FileRepositoryBuilder()
+          .setGitDir(clonePath.resolve(".git").toFile())
+          .readEnvironment()
+          .build();
+    } catch (Exception e) {
+      log.error("could not open the policy clone at {}: {}", clonePath, e.toString());
+      return null;
+    }
+  }
+
   public BundleMaker bundleMaker(Set<String> directories) {
-    Repository repository = repository();
+    return bundleMaker(repositoryOnDisk(), directories);
+  }
+
+  public BundleMaker bundleMaker(Repository repository, Set<String> directories) {
     if (repository == null) {
       return null;
     }
@@ -732,10 +1001,14 @@ public final class ServerRuntime {
   public void publishDataUpdate(Data.DataUpdate update, String scopePrefix) {
     Addressed addressed = addressDataUpdate(update, scopePrefix);
     log.info(
-        "Publishing data update to topics: {}, reason: {}, entries: {}",
+        "[{}] Publishing data update to topics: {}, reason: {}, entries: {}",
+        ProcessHandle.current().pid(),
         addressed.topics(),
         update.reason(),
-        addressed.update().entries().size());
+        // R329: the entries themselves, one map each, with the url redacted. A count says a
+        // publication happened; this says which sources it names, which is what an operator
+        // reading the log after a fleet-wide refetch is looking for.
+        loggedEntries(addressed.update().entries()));
     publish(addressed.topics(), addressed.update());
   }
 
@@ -767,8 +1040,11 @@ public final class ServerRuntime {
             metrics.gauge("opal_server.scopes.leader", 1L, null);
             log.info("Periodic sync");
             scopesService.syncAllScopes(true, true);
-          } catch (RuntimeException e) {
-            log.error("periodic scope sync failed: {}", e.toString());
+          } catch (Throwable e) {
+            // R317: anything at all, because a scheduled task that lets a throwable out is never
+            // scheduled again. Scope syncing would stop for the life of the process with the
+            // pods still ready and the health route still answering 200.
+            log.error("Periodic sync (sync_scopes) failed", e);
           }
         },
         interval,
@@ -778,13 +1054,39 @@ public final class ServerRuntime {
 
   private java.util.concurrent.ScheduledExecutorService scopePolling;
 
+  /**
+   * R336: the ceiling on the shutdown drain of the delete floor's clone purges.
+   *
+   * <p>Its own number rather than the preload's: shutdown runs while an orchestrator's grace
+   * period is counting down, so a longer block converts a clean exit into a kill. A purge's first
+   * act is to take the source lock, which a sync can hold across a whole clone.
+   */
+  static final double SCOPES_DRAIN_TIMEOUT_SECONDS = 5.0;
+
+  /** How long the shutdown waits for a publish already under way. */
+  static final double PUBLISH_DRAIN_TIMEOUT_SECONDS = 5.0;
+
   public void shutdown() {
+    leadership.shutdownNow();
+    // R385: a pull that is publishing when shutdown arrives finishes publishing. Cancelling it
+    // leaves a repository advanced on disk and a fleet that was never told, which nothing later
+    // repairs — the next poll finds no change because the change is already in the clone.
+    webhookTriggers.shutdown();
+    try {
+      if (!webhookTriggers.awaitTermination(
+          (long) (PUBLISH_DRAIN_TIMEOUT_SECONDS * 1000), java.util.concurrent.TimeUnit.MILLISECONDS)) {
+        log.warn("a publish was still in flight when the shutdown drain gave up waiting");
+        webhookTriggers.shutdownNow();
+      }
+    } catch (InterruptedException e) {
+      Thread.currentThread().interrupt();
+      webhookTriggers.shutdownNow();
+    }
     if (scopePolling != null) {
       scopePolling.shutdownNow();
       scopePolling = null;
     }
-    scopesService.stop(
-        Double.parseDouble(server.getString("SCOPES_GIT_PRELOAD_DRAIN_TIMEOUT")));
+    scopesService.stop(SCOPES_DRAIN_TIMEOUT_SECONDS);
     if (leadershipLock != null) {
       leadershipLock.release();
       leadershipLock = null;

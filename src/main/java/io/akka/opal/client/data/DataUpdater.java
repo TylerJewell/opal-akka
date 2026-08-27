@@ -46,6 +46,53 @@ public final class DataUpdater {
   private final boolean splitRootData;
   private final HierarchicalLock destinationLock = new HierarchicalLock();
 
+  /**
+   * R296: where an update runs, which is never the thread it arrived on.
+   *
+   * <p>The source dispatches each update as its own task, so several run at once and the pub/sub
+   * reader is free to take the next frame. Running one inline on the socket's thread would stall
+   * every later frame on that channel behind it — including the keep-alive — and a slow data
+   * source would look like a dropped connection.
+   */
+  private final java.util.concurrent.ExecutorService updates =
+      java.util.concurrent.Executors.newCachedThreadPool(
+          runnable -> {
+            Thread thread = new Thread(runnable, "opal-data-update");
+            thread.setDaemon(true);
+            return thread;
+          });
+
+  private final java.util.concurrent.atomic.AtomicInteger inFlight =
+      new java.util.concurrent.atomic.AtomicInteger();
+
+  /** Runs an update off the caller's thread. */
+  public void triggerDataUpdate(Data.DataUpdate update) {
+    inFlight.incrementAndGet();
+    updates.execute(
+        () -> {
+          try {
+            updatePolicyData(update);
+          } catch (Exception e) {
+            log.error("Failed to update policy data", e);
+          } finally {
+            inFlight.decrementAndGet();
+          }
+        });
+  }
+
+  /** Waits for the updates in flight, which is what a test asserting on the effect needs. */
+  public void awaitIdle(java.time.Duration timeout) {
+    long deadline = System.nanoTime() + timeout.toNanos();
+    while (System.nanoTime() < deadline && inFlight.get() > 0) {
+      try {
+        Thread.sleep(5);
+      } catch (InterruptedException e) {
+        Thread.currentThread().interrupt();
+        return;
+      }
+    }
+  }
+
   private final List<ScheduledFuture<?>> pollingTasks = new ArrayList<>();
   private ScheduledExecutorService scheduler;
 
@@ -177,16 +224,14 @@ public final class DataUpdater {
     log.info("Saving fetched data to policy-store: destination path='{}'",
         path.isEmpty() ? "/" : path);
     if ("PUT".equals(saveMethod)) {
-      transaction.action("set_policy_data");
-      store.setPolicyData(data, path, transaction.transactionId());
+      transaction.store().setPolicyData(data, path, transaction.transactionId());
       return;
     }
-    transaction.action("patch_policy_data");
     List<Store.JSONPatchAction> actions = new ArrayList<>();
     for (JsonNode node : data) {
       actions.add(Rpc.MAPPER.convertValue(node, Store.JSONPatchAction.class));
     }
-    store.patchPolicyData(actions, path, transaction.transactionId());
+    transaction.store().patchPolicyData(actions, path, transaction.transactionId());
   }
 
   /** R54: reports go out only when the client was asked to send them. */
@@ -245,7 +290,10 @@ public final class DataUpdater {
                   log.error("periodic data update failed: {}", e.toString());
                 }
               },
-              millis,
+              // R295: the first call is not delayed. The source's repeated call performs the work
+              // and then sleeps, so an entry with an hour's interval is loaded at start-up rather
+              // than an hour after it — and again after every reconnection.
+              0,
               millis,
               TimeUnit.MILLISECONDS));
     }

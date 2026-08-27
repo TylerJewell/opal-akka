@@ -47,6 +47,12 @@ public final class PolicyStoreClientFactory {
     boolean offlineMode = Boolean.TRUE.equals(config.get("OFFLINE_MODE_ENABLED"));
     List<String> pathsToIgnore = config.get("POLICY_STORE_POLICY_PATHS_TO_IGNORE");
     ConnRetryOptions retry = config.get("POLICY_STORE_CONN_RETRY");
+    // R373: a configuration that names no store at all is refused here rather than at the first
+    // write into it. The three the switch below knows are the three the configuration can parse,
+    // so what is left is an entry nothing set.
+    if (storeType == null) {
+      throw new InvalidPolicyStoreType(storeType + " is not a valid policy store type");
+    }
 
     PolicyStoreClient store =
         switch (storeType) {

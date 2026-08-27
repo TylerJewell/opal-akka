@@ -16,6 +16,7 @@ import java.util.List;
 import java.util.Locale;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
 
 /**
  * SPEC-002 R129 — the headers a browser needs, on every answer this port produces.
@@ -31,9 +32,10 @@ import org.junit.jupiter.api.Test;
  * SDK's route annotations cover five verbs and {@code OPTIONS} is not one of them — what the
  * runtime does with it is recorded here.
  */
+@ExtendWith(OpalProcessExtension.class)
 public class CorsIntegrationTest extends TestKitSupport {
 
-  static {
+  static void startProcess() {
     System.setProperty("OPAL_ROLE", "server");
     System.setProperty("OPAL_ALLOWED_ORIGINS", "https://console.example.com");
   }

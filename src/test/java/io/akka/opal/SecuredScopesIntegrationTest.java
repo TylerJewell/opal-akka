@@ -20,6 +20,7 @@ import org.bouncycastle.util.io.pem.PemObject;
 import org.bouncycastle.util.io.pem.PemWriter;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
 
 /**
  * SPEC-002 R110 — the claim the two scoped read routes need, and the ones they do not.
@@ -34,11 +35,12 @@ import org.junit.jupiter.api.Test;
  * do <em>not</em> need it: a check that refused everywhere would pass the three cases above and
  * be wrong.
  */
+@ExtendWith(OpalProcessExtension.class)
 public class SecuredScopesIntegrationTest extends TestKitSupport {
 
-  private static final Path JWKS_DIR;
+  private static Path JWKS_DIR;
 
-  static {
+  static void startProcess() {
     try {
       KeyPairGenerator generator = KeyPairGenerator.getInstance("RSA");
       generator.initialize(2048);

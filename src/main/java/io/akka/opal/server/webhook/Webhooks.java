@@ -172,15 +172,18 @@ public final class Webhooks {
    */
   public static boolean isMatchingWebhookUrl(
       String inputUrl, List<String> urls, List<String> names) {
-    URI parsed = URI.create(inputUrl);
-    String host = parsed.getHost();
+    // Split the source's way rather than the platform parser's: a repository written
+    // `git@host:org/repo.git` is not a URL the strict parser accepts, and refusing it here would
+    // turn every webhook on an ssh-configured deployment into a server error.
+    io.akka.opal.common.util.PyUrl parsed = io.akka.opal.common.util.PyUrl.split(inputUrl);
+    String host = parsed.hostname();
     String netloc = host == null ? "" : host;
-    if (parsed.getPort() > 0) {
-      netloc = host + ":" + parsed.getPort();
+    if (parsed.port() != null) {
+      netloc = host + ":" + parsed.port();
     }
-    String path = parsed.getPath() == null ? "" : parsed.getPath();
+    String path = parsed.path();
     String normalized =
-        (parsed.getScheme() == null ? "" : parsed.getScheme() + "://") + netloc + path;
+        new io.akka.opal.common.util.PyUrl(parsed.scheme(), netloc, path, "", "").geturl();
     if (urls != null && !urls.isEmpty()) {
       return urls.contains(normalized);
     }

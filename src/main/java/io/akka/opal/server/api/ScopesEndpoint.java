@@ -16,6 +16,7 @@ import io.akka.opal.common.auth.Keys;
 import io.akka.opal.common.auth.Types.EncryptionKeyFormat;
 import io.akka.opal.common.auth.Unauthorized;
 import io.akka.opal.common.schemas.Data;
+import io.akka.opal.common.schemas.Policy;
 import io.akka.opal.common.schemas.PolicySource;
 import io.akka.opal.common.schemas.Scopes;
 import io.akka.opal.common.schemas.Security.PeerType;
@@ -98,21 +99,44 @@ public class ScopesEndpoint extends AbstractHttpEndpoint {
         return invalidKey;
       }
 
-      String oldSourceId =
-          runtime
-              .scopes()
-              .find(scope.scope_id())
-              .map(existing -> runtime.scopesService().sourceIdOf(existing.policy()))
-              .orElse(null);
+      // R386: a previous record nobody can read must not block the write that replaces it. Its
+      // source id is unknowable, so no purge can name it — but refusing the overwrite leaves the
+      // tenant with the unreadable record for good.
+      String oldSourceId = null;
+      try {
+        oldSourceId =
+            runtime
+                .scopes()
+                .find(scope.scope_id())
+                .map(existing -> runtime.scopesService().sourceIdOf(existing.policy()))
+                .orElse(null);
+      } catch (RuntimeException e) {
+        log.warn(
+            "Could not read previous record for scope {}, skipping repoint purge: {}",
+            scope.scope_id(),
+            e.toString());
+      }
       String newSourceId = runtime.scopesService().sourceIdOf(scope.policy());
 
-      runtime.scopes().put(scope);
-      if (oldSourceId != null && !oldSourceId.equals(newSourceId)) {
-        runtime.scopesService().publishPurge(oldSourceId, scope.scope_id());
+      try {
+        runtime.scopes().put(scope);
+      } finally {
+        // R387: published even when the write's outcome is unclear. A write that committed and
+        // then failed to answer leaves a retry seeing the two source ids already equal, so
+        // nothing would ever name the old one again and its clone would be orphaned.
+        if (oldSourceId != null && !oldSourceId.equals(newSourceId)) {
+          runtime.scopesService().publishPurge(oldSourceId, scope.scope_id(), "repoint");
+        }
       }
       boolean forceFetch =
           requestContext().queryParams().getBoolean("force_fetch").orElse(false);
-      runtime.scopesService().refreshScope(scope, forceFetch ? null : "");
+      // R388: every replica syncs the scope, and this answers without waiting for the clone.
+      // Syncing inline here makes the write's latency the clone's latency, and leaves every
+      // other replica holding a stale clone until its own poll comes round.
+      log.info("Sync scope: {}{}", scope.scope_id(), forceFetch ? " (force fetch)" : "");
+      runtime.publish(
+          ServerRuntime.POLICY_REPO_WEBHOOK_TOPIC,
+          Map.of("scope_id", scope.scope_id(), "force_fetch", forceFetch));
       return Responses.created();
     });
   }
@@ -220,8 +244,15 @@ public class ScopesEndpoint extends AbstractHttpEndpoint {
       }
       String hintedHash = requestContext().queryParams().getString("hinted_hash").orElse(null);
       try {
-        Scopes.Scope scope = runtime.scopes().get(scopeId);
-        runtime.scopesService().refreshScope(scope, hintedHash);
+        runtime.scopes().get(scopeId);
+        log.info("Refresh scope: {}", scopeId);
+        // R388: with no hinted hash there is no way to know whether the remote moved, so the
+        // sync is told to fetch; with one, a replica that already holds that commit can skip it.
+        Map<String, Object> message = new java.util.LinkedHashMap<>();
+        message.put("scope_id", scopeId);
+        message.put("force_fetch", hintedHash == null);
+        message.put("hinted_hash", hintedHash);
+        runtime.publish(ServerRuntime.POLICY_REPO_WEBHOOK_TOPIC, message);
         return Responses.json(StatusCodes.OK, null);
       } catch (ScopeRepository.ScopeNotFound e) {
         return Responses.detail(StatusCodes.NOT_FOUND, "No such scope: " + scopeId);
@@ -262,6 +293,11 @@ public class ScopesEndpoint extends AbstractHttpEndpoint {
       }
       String baseHash = requestContext().queryParams().getString("base_hash").orElse(null);
       Scopes.Scope scope;
+      // R308: the fallback to the default scope answers a different 503 from the primary path —
+      // "temporarily unavailable" with Retry-After 5 rather than "being created" with 30. A
+      // caller that asked for a scope which does not exist is being served somebody else's
+      // bundle as a courtesy, and is told to come back sooner.
+      boolean servedByDefault = false;
       try {
         scope = runtime.scopes().get(scopeId);
       } catch (ScopeRepository.ScopeNotFound e) {
@@ -275,51 +311,34 @@ public class ScopesEndpoint extends AbstractHttpEndpoint {
         try {
           scope = runtime.scopes().get("default");
           baseHash = null;
+          servedByDefault = true;
         } catch (ScopeRepository.ScopeNotFound missing) {
           return Responses.detail(StatusCodes.NOT_FOUND, "No such scope: " + scopeId);
         }
       }
       try {
-        GitPolicyFetcher fetcher = runtime.scopesService().fetcherFor(scope);
-        return Responses.ok(fetcher.makeBundle(baseHash));
-      } catch (GitPolicyFetcher.CloneNotPopulated first) {
-        // R242: the clone is on its way. Hold the request rather than refusing it — a client
-        // makes a handful of attempts over half a minute and then goes quiet until something
-        // wakes it, so a clone that outlives those attempts leaves that client with no policy
-        // at all. Waiting turns a gap into latency the client already tolerates.
-        Boolean waited = waitForClone(scope);
-        if (waited == null) {
-          runtime
-              .metrics()
-              .event(
-                  "ScopePolicyUnavailable",
-                  "Scope " + scopeId + " policy 503 (too many waiting)",
-                  Map.of("scope_id", scopeId, "status", "503", "retryable", "true"));
-          return retryAfter(
-              StatusCodes.SERVICE_UNAVAILABLE,
-              "Policy clone for scope " + scopeId + " is being created, retry shortly",
-              "30");
-        }
-        if (waited) {
-          try {
-            return Responses.ok(runtime.scopesService().fetcherFor(scope).makeBundle(baseHash));
-          } catch (RuntimeException stillNot) {
-            log.warn("Scope {} clone was ready and the bundle still failed", scopeId, stillNot);
-          }
-        }
+        return Responses.ok(bundleWaitingForClone(scope, scopeId, baseHash));
+      } catch (GitPolicyFetcher.CloneNotPopulated stillCloning) {
+        // R242: the clone was still not usable when the budget ran out.
         runtime
             .metrics()
             .event(
                 "ScopePolicyUnavailable",
                 "Scope " + scopeId + " policy 503 (clone in progress)",
                 Map.of("scope_id", scopeId, "status", "503", "retryable", "true"));
-        return retryAfter(
-            StatusCodes.SERVICE_UNAVAILABLE,
-            "Policy clone for scope " + scopeId + " is being created, retry shortly",
-            "30");
+        return cloneUnavailable(scopeId, servedByDefault, "being created");
+      } catch (CloneWaitShed shed) {
+        runtime
+            .metrics()
+            .event(
+                "ScopePolicyUnavailable",
+                "Scope " + scopeId + " policy 503 (too many waiting)",
+                Map.of("scope_id", scopeId, "status", "503", "retryable", "true"));
+        return cloneUnavailable(scopeId, servedByDefault, "being created");
       } catch (GitPolicyFetcher.BranchHeadNotFound e) {
         // R243: the clone is there and the branch this scope names is not, which no amount of
-        // waiting fixes. A caller told to retry would retry until somebody edited the scope.
+        // waiting fixes - including a wait that has already happened. A caller told to retry
+        // would retry until somebody edited the scope.
         runtime
             .metrics()
             .event(
@@ -337,12 +356,186 @@ public class ScopesEndpoint extends AbstractHttpEndpoint {
                 "ScopePolicyUnavailable",
                 "Scope " + scopeId + " policy 503 (clone unavailable)",
                 Map.of("scope_id", scopeId, "status", "503", "retryable", "true"));
-        return retryAfter(
-            StatusCodes.SERVICE_UNAVAILABLE,
-            "Policy clone for scope " + scopeId + " is temporarily unavailable, retry shortly",
-            "5");
+        return cloneUnavailable(scopeId, true, "temporarily unavailable");
       }
     });
+  }
+
+  /** R242: this process is already holding as many requests inside the wait as it is allowed to. */
+  static final class CloneWaitShed extends RuntimeException {}
+
+  /**
+   * R242 and R401: the bundle, holding the request while the clone is populated.
+   *
+   * <p>The build is attempted again on every poll rather than once at the end, and only a clone
+   * that is still not populated keeps the wait going. Everything else a build can raise comes
+   * straight out - a branch that is not there is a 409 whether it was found before the wait or
+   * after it, and a gutted object store is a retryable 503 - because a wait that relabelled
+   * those would answer a permanent misconfiguration with "try again".
+   *
+   * <p>Exactly one outcome is counted per request that reaches the wait: served, timeout, shed,
+   * disconnected, cancelled or error.
+   */
+  private Policy.PolicyBundle bundleWaitingForClone(
+      Scopes.Scope scope, String scopeId, String baseHash) {
+    try {
+      return runtime.scopesService().fetcherFor(scope).makeBundle(baseHash);
+    } catch (GitPolicyFetcher.CloneNotPopulated first) {
+      // Fall through to the wait.
+    }
+    double budget = boundedCloneWait();
+    if (budget <= 0) {
+      throw new GitPolicyFetcher.CloneNotPopulated("clone is not populated");
+    }
+    int ceiling = (Integer) runtime.config().get("SCOPES_POLICY_CLONE_WAIT_MAX_INFLIGHT");
+    if (ceiling > 0 && CLONE_WAIT_IN_FLIGHT.get() >= ceiling) {
+      log.info(
+          "Scope {} clone wait is at its {}-request cap; answering 503 without waiting",
+          scopeId,
+          ceiling);
+      runtime.metrics().increment(CLONE_WAIT_METRIC, Map.of("outcome", "shed"));
+      throw new CloneWaitShed();
+    }
+    long started = System.nanoTime();
+    long deadline = started + (long) (budget * 1_000_000_000L);
+    String outcome = "error";
+    int inFlight = CLONE_WAIT_IN_FLIGHT.incrementAndGet();
+    try {
+      publishInFlight(inFlight);
+      while (true) {
+        long remaining = deadline - System.nanoTime();
+        if (remaining <= 0) {
+          outcome = "timeout";
+          throw new GitPolicyFetcher.CloneNotPopulated("clone is not populated");
+        }
+        try {
+          Thread.sleep(Math.min(CLONE_WAIT_POLL_MILLIS, remaining / 1_000_000L + 1));
+        } catch (InterruptedException e) {
+          // R402: a wait torn down is counted as one. Left out, a fleet whose waits are all
+          // being cancelled looks exactly like a fleet where nothing is waiting.
+          Thread.currentThread().interrupt();
+          outcome = "cancelled";
+          log.info("Scope {} clone wait cancelled after {}s", scopeId, secondsSince(started));
+          throw new GitPolicyFetcher.CloneNotPopulated("clone wait cancelled");
+        }
+        // R403: the caller may have gone. Nobody is waiting for that bundle, and the slot is
+        // worth more to a request that is still listening.
+        if (callerHasGone()) {
+          outcome = "disconnected";
+          log.info(
+              "Scope {} clone wait abandoned after {}s: the client disconnected",
+              scopeId,
+              secondsSince(started));
+          throw new GitPolicyFetcher.CloneNotPopulated("the client disconnected");
+        }
+        try {
+          Policy.PolicyBundle bundle =
+              runtime.scopesService().fetcherFor(scope).makeBundle(baseHash);
+          outcome = "served";
+          log.info(
+              "Scope {} clone became available after {}s wait", scopeId, secondsSince(started));
+          return bundle;
+        } catch (GitPolicyFetcher.CloneNotPopulated again) {
+          // Still being populated; keep waiting.
+        } catch (RuntimeException other) {
+          log.info(
+              "Scope {} held {}s waiting for its clone before failing: {}",
+              scopeId,
+              secondsSince(started),
+              other.toString());
+          throw other;
+        }
+      }
+    } finally {
+      int left = CLONE_WAIT_IN_FLIGHT.decrementAndGet();
+      publishInFlight(left);
+      runtime.metrics().increment(CLONE_WAIT_METRIC, Map.of("outcome", outcome));
+      if (outcome.equals("served") || outcome.equals("timeout")) {
+        runtime
+            .metrics()
+            .gauge(
+                CLONE_WAIT_SECONDS_METRIC,
+                Math.round(secondsSince(started)),
+                Map.of("outcome", outcome));
+      }
+    }
+  }
+
+  private static double secondsSince(long startedNanos) {
+    return Math.round((System.nanoTime() - startedNanos) / 100_000_000.0) / 10.0;
+  }
+
+  private void publishInFlight(int count) {
+    runtime
+        .metrics()
+        .gauge(
+            CLONE_WAIT_INFLIGHT_METRIC,
+            (long) count,
+            Map.of("pid", String.valueOf(ProcessHandle.current().pid())));
+  }
+
+  /**
+   * R404: whether the caller has hung up.
+   *
+   * <p>The runtime's HTTP layer hands a handler a finished request and takes an answer back; it
+   * does not tell the handler that the connection went away underneath it, and the handler is
+   * not asynchronous, so there is nothing to observe. This answers false, and the
+   * {@code disconnected} outcome is therefore never counted here - a difference from the source
+   * recorded in the README rather than a gap in the accounting.
+   */
+  private boolean callerHasGone() {
+    return false;
+  }
+
+  /** How often the wait looks again. One poll is a directory read and a ref listing. */
+  static final long CLONE_WAIT_POLL_MILLIS = 1000;
+
+  /**
+   * R405: the configured hold, validated and clamped, with the clamp said once.
+   *
+   * <p>A hold longer than a load balancer's idle timeout is served as a gateway timeout rather
+   * than as a bundle, which is the failure the wait exists to prevent. The warning latches
+   * because a misconfigured fleet would otherwise emit one identical line per request.
+   */
+  private double boundedCloneWait() {
+    double budget = readDouble("SCOPES_POLICY_CLONE_WAIT_SECONDS");
+    if (!Double.isFinite(budget) || budget <= 0) {
+      return 0;
+    }
+    if (budget > CLONE_WAIT_CEILING_SECONDS) {
+      if (CLAMP_LOGGED.compareAndSet(false, true)) {
+        log.warn(
+            "SCOPES_POLICY_CLONE_WAIT_SECONDS={}s exceeds the {}s ceiling and is clamped: a hold"
+                + " longer than the load balancer's idle timeout is served as a 504, not as a"
+                + " bundle",
+            budget,
+            CLONE_WAIT_CEILING_SECONDS);
+      }
+      return CLONE_WAIT_CEILING_SECONDS;
+    }
+    return budget;
+  }
+
+  private static final java.util.concurrent.atomic.AtomicBoolean CLAMP_LOGGED =
+      new java.util.concurrent.atomic.AtomicBoolean();
+
+  /**
+   * The 503 a clone that cannot answer yet produces.
+   *
+   * <p>Two shapes: the primary path says the clone is being created and asks for thirty seconds,
+   * the default-scope fallback says it is temporarily unavailable and asks for five.
+   */
+  private HttpResponse cloneUnavailable(String scopeId, boolean servedByDefault, String reason) {
+    if (servedByDefault) {
+      return retryAfter(
+          StatusCodes.SERVICE_UNAVAILABLE,
+          "Policy clone for scope " + scopeId + " is temporarily unavailable, retry shortly",
+          "5");
+    }
+    return retryAfter(
+        StatusCodes.SERVICE_UNAVAILABLE,
+        "Policy clone for scope " + scopeId + " is " + reason + ", retry shortly",
+        "30");
   }
 
   /** R242: how many requests this process is holding inside the wait, and the ceiling on it. */
@@ -365,70 +558,6 @@ public class ScopesEndpoint extends AbstractHttpEndpoint {
 
   private static final String CLONE_WAIT_SECONDS_METRIC =
       "opal_server.scopes.policy_clone_wait_seconds";
-
-  /**
-   * R242: holds the request while the clone is being populated.
-   *
-   * <p>Answers true when the clone became usable, false when the wait ran out, and null when this
-   * process is already holding as many requests as it is allowed to — which is refused
-   * immediately, because releasing a thousand held requests at once builds a thousand bundles at
-   * once and every one of them then misses the deadline the wait existed to protect.
-   */
-  private Boolean waitForClone(Scopes.Scope scope) {
-    double budget = readDouble("SCOPES_POLICY_CLONE_WAIT_SECONDS");
-    if (!Double.isFinite(budget) || budget <= 0) {
-      return false;
-    }
-    budget = Math.min(budget, CLONE_WAIT_CEILING_SECONDS);
-    int ceiling = (Integer) runtime.config().get("SCOPES_POLICY_CLONE_WAIT_MAX_INFLIGHT");
-    int inFlight = CLONE_WAIT_IN_FLIGHT.incrementAndGet();
-    try {
-      runtime
-          .metrics()
-          .gauge(
-              CLONE_WAIT_INFLIGHT_METRIC,
-              (long) inFlight,
-              Map.of("pid", String.valueOf(ProcessHandle.current().pid())));
-      if (ceiling > 0 && inFlight > ceiling) {
-        runtime.metrics().increment(CLONE_WAIT_METRIC, Map.of("outcome", "shed"));
-        return null;
-      }
-      long started = System.nanoTime();
-      long deadline = started + (long) (budget * 1_000_000_000L);
-      while (System.nanoTime() < deadline) {
-        try {
-          Thread.sleep(1000);
-        } catch (InterruptedException e) {
-          Thread.currentThread().interrupt();
-          return false;
-        }
-        if (runtime.scopesService().cloneReady(scope)) {
-          record("served", started);
-          return true;
-        }
-      }
-      record("timeout", started);
-      return false;
-    } finally {
-      int remaining = CLONE_WAIT_IN_FLIGHT.decrementAndGet();
-      runtime
-          .metrics()
-          .gauge(
-              CLONE_WAIT_INFLIGHT_METRIC,
-              (long) remaining,
-              Map.of("pid", String.valueOf(ProcessHandle.current().pid())));
-    }
-  }
-
-  private void record(String outcome, long startedNanos) {
-    runtime.metrics().increment(CLONE_WAIT_METRIC, Map.of("outcome", outcome));
-    runtime
-        .metrics()
-        .gauge(
-            CLONE_WAIT_SECONDS_METRIC,
-            (System.nanoTime() - startedNanos) / 1_000_000_000.0,
-            Map.of("outcome", outcome));
-  }
 
   private double readDouble(String entry) {
     try {

@@ -199,6 +199,10 @@ public final class OpalStatistics {
       log.warn("Got invalid statistics sync request from another server, error: {}", e.toString());
       return;
     }
+    if (request.requesting_worker_id() == null) {
+      log.warn("Got invalid statistics sync request from another server, error: field required");
+      return;
+    }
     if (workerId.equals(request.requesting_worker_id())) {
       return;
     }
@@ -242,6 +246,15 @@ public final class OpalStatistics {
       log.warn("Got invalid statistics sync response from another server, error: {}", e.toString());
       return;
     }
+    // R326: a response missing its fields is not a state to apply. Applying an empty one sets
+    // the latch and blocks the valid answer that arrives afterwards, so this worker starts blind
+    // and stays blind.
+    if (response.requesting_worker_id() == null
+        || response.clients() == null
+        || response.rpc_id_to_client_id() == null) {
+      log.warn("Got invalid statistics sync response from another server, error: field required");
+      return;
+    }
     receivedSyncMessages.add(response.requesting_worker_id());
     if (clients.isEmpty() && !syncedAfterWakeup) {
       log.info("[{}] applying server stats", response.requesting_worker_id());
@@ -275,8 +288,11 @@ public final class OpalStatistics {
       log.warn("Got invalid statistics message from client, error: {}", e.toString());
       return;
     }
-    if (stats.client_id() == null || stats.rpc_id() == null) {
-      log.warn("Got invalid statistics message from client, error: missing id");
+    // R326: every field the schema requires. A message missing one does not validate in the
+    // source and is dropped there; accepting it here stores a channel whose topics are null and
+    // reports it that way to whoever reads the statistics.
+    if (stats.client_id() == null || stats.rpc_id() == null || stats.topics() == null) {
+      log.warn("Got invalid statistics message from client, error: field required");
       return;
     }
     log.info(

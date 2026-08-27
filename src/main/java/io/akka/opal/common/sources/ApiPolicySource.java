@@ -5,6 +5,7 @@ import io.akka.opal.common.git.TarToLocalGit;
 import io.akka.opal.common.util.Aws;
 import io.akka.opal.common.util.Hashing;
 import io.akka.opal.common.util.Http;
+import io.akka.opal.common.util.Urls;
 import java.net.URI;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
@@ -68,32 +69,81 @@ public final class ApiPolicySource extends PolicySource {
     return localGit != null;
   }
 
+  /**
+   * R321: the bundle server is retried every five seconds, without giving up.
+   *
+   * <p>The source wraps both the first fetch and every later one in a retry with a fixed wait and
+   * no stop condition, so a bundle server that is down at start-up — or for an hour — is waited
+   * for rather than abandoned. One attempt and a failure callback would leave a deployment with
+   * no policy for the life of the process, and would tell the watcher its source had failed,
+   * which ends the process.
+   */
   @Override
   public void getInitialPolicyStateFromRemote() {
-    try {
-      fetchPolicyBundle();
-      localGit = tarToGit.createLocalGit();
-    } catch (Exception e) {
-      log.error("Failed to load initial policy from remote API bundle server", e);
-      fireFailure(e instanceof Exception ? e : new IllegalStateException(e));
+    retryingForever(
+        () -> {
+          fetchPolicyBundle();
+          localGit = tarToGit.createLocalGit();
+          return null;
+        },
+        "Failed to load initial policy from remote API bundle server");
+  }
+
+  /** Five seconds between attempts, and no attempt count. */
+  static final long RETRY_WAIT_MILLIS = 5000;
+
+  private volatile boolean stopped;
+
+  /** Work that may fail the way the fetch does. */
+  private interface Attempt<T> {
+    T run() throws Exception;
+  }
+
+  private <T> T retryingForever(Attempt<T> work, String message) {
+    while (!stopped && !Thread.currentThread().isInterrupted()) {
+      try {
+        return work.run();
+      } catch (Exception e) {
+        log.error(message, e);
+      }
+      try {
+        Thread.sleep(RETRY_WAIT_MILLIS);
+      } catch (InterruptedException e) {
+        Thread.currentThread().interrupt();
+        return null;
+      }
     }
+    return null;
   }
 
   @Override
   protected void releaseRepository() {
+    stopped = true;
     if (localGit != null) {
       localGit.close();
       localGit = null;
     }
   }
 
+  /**
+   * R382: the three lines a watch cycle writes — where it looked, and whether the version moved.
+   *
+   * <p>A bundle source that is fetching every poll and finding the same version looks identical,
+   * from a silent log, to one that has stopped polling.
+   */
   @Override
   public void checkForChanges() {
-    try {
-      apiUpdatePolicy();
-    } catch (Exception e) {
-      log.error("Failed to update policy from remote API bundle server", e);
-      fireFailure(e);
+    log.info("Fetching changes from remote: '{}'", Urls.redactUrl(remoteSourceUrl));
+    Updated updated =
+        retryingForever(
+            this::apiUpdatePolicy, "Failed to update policy from remote API bundle server");
+    if (updated == null) {
+      return;
+    }
+    if (!updated.changed()) {
+      log.info("No new version: current hash is: {}", updated.version());
+    } else {
+      log.info("Found new version: new version hash is '{}'", updated.version());
     }
   }
 
@@ -139,10 +189,13 @@ public final class ApiPolicySource extends PolicySource {
       request.header("ETag", etag).header("If-None-Match", etag);
     }
     HttpResponse<byte[]> response =
-        Http.plain().send(request.build(), HttpResponse.BodyHandlers.ofByteArray());
+        Http.send(Http.plain(), request.build(), HttpResponse.BodyHandlers.ofByteArray());
     if (response.statusCode() == 404) {
-      log.warn("requested url not found: {}", fullUrl);
-      throw new IllegalStateException("requested url not found: " + fullUrl);
+      // R383: the address is redacted in both the line and the message. A bundle url carrying a
+      // token in its userinfo would otherwise reach a log and an exception a caller can read.
+      String safeUrl = Urls.redactUrl(fullUrl);
+      log.warn("requested url not found: {}", safeUrl);
+      throw new IllegalStateException("requested url not found: " + safeUrl);
     }
     if (response.statusCode() == 304) {
       log.info("Not modified");

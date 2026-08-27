@@ -88,7 +88,10 @@ public abstract class PolicySource {
                 log.error("Error occurred during polling task check_for_changes: {}", e.toString());
               }
             },
-            pollingInterval,
+            // R320: the first check runs immediately. The source performs the check and then
+            // sleeps, so a commit landing seconds after start-up is seen at once rather than a
+            // whole polling interval later.
+            0,
             pollingInterval,
             TimeUnit.SECONDS);
   }

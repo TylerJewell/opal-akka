@@ -22,6 +22,9 @@ public final class HierarchicalLock {
 
   private final Set<String> lockedPaths = new HashSet<>();
   private final Map<Object, Set<String>> holderLocks = new HashMap<>();
+  private static final org.slf4j.Logger log =
+      org.slf4j.LoggerFactory.getLogger(HierarchicalLock.class);
+
   private final ReentrantLock lock = new ReentrantLock();
   private final Condition released = lock.newCondition();
 
@@ -42,10 +45,14 @@ public final class HierarchicalLock {
             "Task " + holder + " cannot re-acquire lock on '" + path + "'.");
       }
       while (conflicts(path)) {
+        // R381: a wait that is invisible looks like work that is slow. Two data updates writing
+        // to overlapping destinations serialise here, and this is the only place that says so.
+        log.debug("Found conflicting path with '{}', waiting for release to check again...", path);
         released.await();
       }
       lockedPaths.add(path);
       holderLocks.computeIfAbsent(holder, ignored -> new HashSet<>()).add(path);
+      log.debug("Acquired lock for path: {}", path);
     } finally {
       lock.unlock();
     }
@@ -72,6 +79,7 @@ public final class HierarchicalLock {
         holderLocks.remove(holder);
       }
       released.signalAll();
+      log.debug("Released lock for path: {}", path);
     } finally {
       lock.unlock();
     }

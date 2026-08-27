@@ -26,6 +26,9 @@ import java.util.Map;
 @HttpEndpoint
 public class ClientHealthEndpoint extends AbstractHttpEndpoint {
 
+  private static final org.slf4j.Logger log =
+      org.slf4j.LoggerFactory.getLogger(ClientHealthEndpoint.class);
+
   private final ClientRuntime runtime;
 
   public ClientHealthEndpoint(ClientRuntime runtime) {
@@ -73,6 +76,7 @@ public class ClientHealthEndpoint extends AbstractHttpEndpoint {
       if (!Role.isClient()) {
         return Responses.notFound();
       }
+      log.info("triggered policy update from api");
       runtime.policyUpdater().triggerUpdatePolicy(null, true);
       return Responses.statusOk();
     });
@@ -95,11 +99,15 @@ public class ClientHealthEndpoint extends AbstractHttpEndpoint {
       if (!Role.isClient()) {
         return Responses.notFound();
       }
+      log.info("triggered policy data update from api");
       if (!Boolean.TRUE.equals(runtime.config().get("DATA_UPDATER_ENABLED"))) {
         return Responses.detail(
-            StatusCodes.SERVICE_UNAVAILABLE, "Data Updater is currently disabled");
+            StatusCodes.SERVICE_UNAVAILABLE,
+            "Data Updater is currently disabled. Dynamic data updates are not available.");
       }
-      runtime.fetchBaseDataConfiguration("request from client's API");
+      // The reason is not internal: it travels on the update, is logged by the fetch, and is
+      // echoed in the line the client writes when it applies one.
+      runtime.fetchBaseDataConfiguration("request from sdk");
       return Responses.statusOk();
     });
   }

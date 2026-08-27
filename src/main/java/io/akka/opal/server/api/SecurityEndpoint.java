@@ -42,7 +42,6 @@ public class SecurityEndpoint extends AbstractHttpEndpoint {
 
   public SecurityEndpoint(ServerRuntime runtime) {
     this.runtime = runtime;
-    writeJwks();
   }
 
   /** R72: the master token as a static credential, and 503 when there is no signing key. */
@@ -79,47 +78,37 @@ public class SecurityEndpoint extends AbstractHttpEndpoint {
     });
   }
 
-  /** R74: the public half, as the framework serves it from the static directory. */
+  /**
+   * R74: the public half, as the framework serves it from the static directory.
+   *
+   * <p>R327: the document is served where {@code AUTH_JWKS_URL} says. The source mounts the
+   * static directory at that path, so moving the entry moves the document — the compiled path
+   * here stops answering when it does, and {@link #jwksAtOne} and its siblings answer the new
+   * one.
+   */
   @Get("/.well-known/jwks.json")
   public HttpResponse jwks() {
     return Responses.guarded(requestContext(), () -> {
-      if (!Role.isServer()) {
+      if (!Role.isServer() || !"/.well-known/jwks.json".equals(configuredJwksUrl())) {
         return Responses.notFound();
       }
-      try {
-        Path file = jwksFile();
-        if (Files.isRegularFile(file)) {
-          return Responses.ok(Rpc.MAPPER.readTree(Files.readString(file, StandardCharsets.UTF_8)));
-        }
-      } catch (Exception e) {
-        log.warn("could not read the jwks file: {}", e.toString());
-      }
-      return Responses.ok(Map.of());
+      return servedJwks();
     });
   }
 
-  private Path jwksFile() {
-    String url = runtime.config().getString("AUTH_JWKS_URL");
-    String name = url.substring(url.lastIndexOf('/') + 1);
-    return Path.of(runtime.config().getString("AUTH_JWKS_STATIC_DIR")).resolve(name);
+  /** The document itself, for the dispatch that answers a moved path. */
+  public HttpResponse servedJwks() {
+    return Responses.ok(Jwks.read(runtime));
   }
 
-  private void writeJwks() {
-    if (!Role.isServer()) {
-      return;
-    }
-    try {
-      Path file = jwksFile();
-      Files.createDirectories(file.getParent());
-      Object contents = Map.of();
-      if (runtime.signer().enabled()) {
-        contents =
-            Map.of("keys", List.of(Rpc.MAPPER.readTree(runtime.signer().getJwk())));
-      }
-      Files.writeString(file, Rpc.MAPPER.writeValueAsString(contents), StandardCharsets.UTF_8);
-    } catch (Exception e) {
-      log.warn("could not write the jwks file: {}", e.toString());
-    }
+  /** The configured path, with a leading slash so it can be compared to a request path. */
+  private String configuredJwksUrl() {
+    return Jwks.mountedAt(runtime);
+  }
+
+  /** Whether a request path is the one the JWKS entry names. */
+  public boolean jwksIsMountedAt(String path) {
+    return configuredJwksUrl().equals(path);
   }
 
   /**

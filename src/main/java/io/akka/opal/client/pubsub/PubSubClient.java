@@ -194,6 +194,10 @@ public final class PubSubClient implements AutoCloseable {
           // colons. The prefix is not part of the topic this client subscribed to, so it is taken
           // off before the topic is matched — otherwise every notification arrives unrecognised.
           String topic = stripTenantPrefix(subscription.path("topic").asText());
+          // R358: everything that arrived, before anything acts on it. A notification the client
+          // then declines to act on — a topic it does not recognise, a payload that will not
+          // parse — leaves no other trace that it was ever delivered.
+          log.debug("Received notification of event: subscription={}, data={}", subscription, data);
           onNotification.accept(topic, data);
           send(webSocket, Rpc.RpcMessage.response(null, "NoneType", request.call_id()));
           return;
@@ -214,13 +218,19 @@ public final class PubSubClient implements AutoCloseable {
     }
   }
 
-  /** R252: what a topic is called once the tenant prefix is off it. */
+  /**
+   * R252: what a topic is called once the tenant prefix is off it.
+   *
+   * <p>The second field, not the rest of the string: the source splits on every {@code ::} and
+   * takes index one, so {@code app::a::b} dispatches on {@code a}. A topic with no prefix is
+   * itself.
+   */
   public static String stripTenantPrefix(String topic) {
     if (topic == null) {
       return null;
     }
-    int separator = topic.indexOf("::");
-    return separator < 0 ? topic : topic.substring(separator + 2);
+    String[] fields = topic.split("::", -1);
+    return fields.length > 1 ? fields[1] : fields[0];
   }
 
   private void send(WebSocket webSocket, Rpc.RpcMessage message) {
@@ -251,9 +261,19 @@ public final class PubSubClient implements AutoCloseable {
         true);
   }
 
-  /** Blocks until the subscription has been sent, which is what a publisher waits on. */
+  /**
+   * Blocks until the subscription has been sent, which is what a publisher waits on.
+   *
+   * <p>A null timeout waits for as long as it takes: a message sent before the subscription
+   * exists reaches nobody, so giving up on the wait and sending anyway is the one outcome worse
+   * than waiting.
+   */
   public boolean waitUntilReady(Duration timeout) {
     try {
+      if (timeout == null) {
+        ready.await();
+        return true;
+      }
       return ready.await(timeout.toMillis(), TimeUnit.MILLISECONDS);
     } catch (InterruptedException e) {
       Thread.currentThread().interrupt();
@@ -286,19 +306,40 @@ public final class PubSubClient implements AutoCloseable {
     }
   }
 
+  /**
+   * R357: closes, and waits a bounded time for the close to be acknowledged.
+   *
+   * <p>An unbounded wait here is a shutdown that never finishes, and no wait at all is a
+   * disconnection nobody can tell from a dropped socket. When the bound is reached it says so,
+   * because a shutdown that took the full budget every time is the symptom of a peer that is not
+   * answering.
+   */
   @Override
   public void close() {
     running.set(false);
     stopKeepAlive();
     WebSocket current = socket;
     if (current != null) {
-      current.sendClose(WebSocket.NORMAL_CLOSURE, "bye");
+      java.util.concurrent.CompletableFuture<WebSocket> closing =
+          current.sendClose(WebSocket.NORMAL_CLOSURE, "bye").toCompletableFuture();
+      try {
+        closing.get(DISCONNECT_TIMEOUT_SECONDS, TimeUnit.SECONDS);
+      } catch (InterruptedException e) {
+        Thread.currentThread().interrupt();
+      } catch (java.util.concurrent.TimeoutException e) {
+        log.warn("Timeout waiting for pub/sub client to disconnect");
+      } catch (Exception e) {
+        log.warn("pub/sub client disconnect failed: {}", e.toString());
+      }
     }
     if (reconnectThread != null) {
       reconnectThread.interrupt();
       reconnectThread = null;
     }
   }
+
+  /** How long a close waits to be acknowledged before it stops waiting. */
+  static final long DISCONNECT_TIMEOUT_SECONDS = 5;
 
   /** The topics this client asked for, for the statistics message it publishes on connect. */
   public List<String> topics() {

@@ -122,6 +122,16 @@ public final class GitOps {
   public static <T> T run(String sourceId, Supplier<T> operation) {
     int ceiling = Math.max(0, settings.maxZombies());
     if (ceiling > 0 && IN_FLIGHT.get() >= ceiling) {
+      // R318: latched, once per episode. The counter below answers how hard and for how long;
+      // this answers whether the cap was reached at all, which is the line an operator reads
+      // mid-outage and which would be unreadable repeated per refusal.
+      if (ZOMBIE_CAP_LOGGED.compareAndSet(false, true)) {
+        log.error(
+            "Refusing new scope git op: {} in-flight at/over SCOPES_GIT_MAX_ZOMBIES={};"
+                + " remotes appear stuck.",
+            IN_FLIGHT.get(),
+            ceiling);
+      }
       metrics.increment(
           "opal_server.scopes.git_ops_refused",
           Map.of("pid", String.valueOf(ProcessHandle.current().pid())));
@@ -130,9 +140,6 @@ public final class GitOps {
               + ceiling + ")");
     }
 
-    BUSY.add(sourceId);
-    IN_FLIGHT.incrementAndGet();
-    emitInFlight();
     ExecutorService executor =
         Executors.newSingleThreadExecutor(
             runnable -> {
@@ -142,8 +149,16 @@ public final class GitOps {
             });
     Future<T> future = null;
     boolean abandoned = false;
+    boolean marked = false;
     try {
+      // R319: the operation counts as in flight once it has a worker, not while it waits for
+      // one. Marking it earlier makes the zombie ceiling count work merely queued behind
+      // SCOPES_GIT_MAX_WORKERS, so a busy pass refuses operations that are not stuck at all.
       workers.acquire();
+      BUSY.add(sourceId);
+      IN_FLIGHT.incrementAndGet();
+      marked = true;
+      emitInFlight();
       try {
         future = executor.submit(operation::get);
         double timeout = settings.fetchTimeoutSeconds();
@@ -170,7 +185,9 @@ public final class GitOps {
       }
       throw new IllegalStateException(cause);
     } finally {
-      if (abandoned) {
+      if (!marked) {
+        executor.shutdownNow();
+      } else if (abandoned) {
         // The thread is still inside the git call and will not stop when asked; it is left to
         // finish on its own and counted until it does.
         Future<T> lingering = future;
@@ -196,9 +213,19 @@ public final class GitOps {
     }
   }
 
+  /** R318: whether the cap refusal has already been logged in this episode. */
+  private static final java.util.concurrent.atomic.AtomicBoolean ZOMBIE_CAP_LOGGED =
+      new java.util.concurrent.atomic.AtomicBoolean();
+
   private static void release(String sourceId) {
     BUSY.remove(sourceId);
-    IN_FLIGHT.decrementAndGet();
+    int remaining = IN_FLIGHT.decrementAndGet();
+    int ceiling = Math.max(0, settings.maxZombies());
+    // The latch clears when the count drops back below the cap, so a second episode is logged
+    // rather than swallowed by the first.
+    if (ceiling == 0 || remaining < ceiling) {
+      ZOMBIE_CAP_LOGGED.set(false);
+    }
     emitInFlight();
   }
 
@@ -260,12 +287,37 @@ public final class GitOps {
           url,
           failures);
     }
+    // R399: the failure that reaches the ceiling says so, once. Past it the delay stops growing,
+    // so every later line looks the same as the one before and nothing marks where the source
+    // stopped getting further away.
+    double ceiling = positiveOrZero(settings.backoffMaxSeconds());
+    double floor = positiveOrZero(settings.backoffBaseSeconds());
+    double capped = Math.max(ceiling, floor);
+    boolean reachedCap =
+        ceiling > 0
+            && delay >= capped
+            && (previous == null || backoffDelay(failures - 1) < capped);
+    if (reachedCap) {
+      log.warn(
+          "{} has reached the {}s backoff ceiling after {} consecutive failures",
+          url,
+          Math.round(capped),
+          failures);
+    }
     emitSourcesInBackoff();
   }
 
-  /** A source that answered is no longer in backoff, whatever it did before. */
+  /**
+   * A source that answered is no longer in backoff, whatever it did before.
+   *
+   * <p>R399: and it says how many failures it took, because the failures were logged and the
+   * recovery otherwise is not — a source that came back looks exactly like one still failing
+   * quietly.
+   */
   public static void clearFailure(String sourceId) {
-    if (BACKOFF.remove(sourceId) != null) {
+    SourceBackoff previous = BACKOFF.remove(sourceId);
+    if (previous != null) {
+      log.info("Source {} recovered after {} failures", sourceId, previous.consecutiveFailures());
       emitSourcesInBackoff();
     }
   }

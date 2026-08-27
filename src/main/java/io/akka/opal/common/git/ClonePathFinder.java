@@ -97,9 +97,11 @@ public final class ClonePathFinder {
       return List.of();
     }
     List<Path> found = new ArrayList<>();
+    // R379: anything matching the pattern counts, directory or not. The source globs, and a file
+    // sitting where a clone directory should be is a name already taken — treating it as absent
+    // makes the finder hand out a path that cannot be cloned into.
     try (Stream<Path> children = Files.list(base)) {
       children
-          .filter(Files::isDirectory)
           .filter(child -> child.getFileName().toString().startsWith(prefix + "-"))
           .forEach(found::add);
     } catch (IOException e) {

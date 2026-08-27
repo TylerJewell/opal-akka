@@ -215,6 +215,27 @@ public class ServerEndpointIntegrationTest extends TestKitSupport {
     StrictResponse<ByteString> redoc = httpClient.GET("/redoc").invoke();
     assertEquals(200, redoc.status().intValue());
     assertTrue(redoc.body().decodeString(StandardCharsets.UTF_8).contains("redoc"));
+    assertTrue(
+        redoc.body().decodeString(StandardCharsets.UTF_8).contains("spec-url=\"/openapi.json\""),
+        "with no proxy in front, the page is byte for byte what the source serves");
+  }
+
+  /**
+   * R338: behind a proxy that mounts this process under a prefix, the page asks for the document
+   * under the same prefix.
+   *
+   * <p>A page served at {@code /opal/redoc} and fetching {@code /openapi.json} asks for a path
+   * the proxy does not map, and the screen draws nothing.
+   */
+  @Test
+  public void theRenderedSurfaceFollowsTheProxyPrefix() {
+    for (String route : java.util.List.of("/redoc", "/docs")) {
+      StrictResponse<ByteString> page =
+          httpClient.GET(route).addHeader("X-Forwarded-Prefix", "/opal/").invoke();
+      assertEquals(200, page.status().intValue());
+      String markup = page.body().decodeString(StandardCharsets.UTF_8);
+      assertTrue(markup.contains("/opal/openapi.json"), route + " asked for " + markup);
+    }
   }
 
   /** OD-9: OPAL's vendor-agent measurements are readable here instead. */

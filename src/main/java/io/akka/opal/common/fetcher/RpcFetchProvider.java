@@ -52,8 +52,13 @@ public final class RpcFetchProvider implements FetchProvider {
           "FastApiRpcFetchProvider needs rpc_method_name in the entry's config");
     }
     Object rawArguments = config.get("rpc_arguments");
-    Map<String, Object> arguments =
-        rawArguments instanceof Map<?, ?> given ? castArguments(given) : Map.of();
+    // Required by the source's own config schema, so an entry without it is refused rather than
+    // fetched with no arguments.
+    if (!(rawArguments instanceof Map<?, ?> given)) {
+      throw new io.akka.opal.common.schemas.Schemas.ValidationFailure(
+          "rpc_arguments: field required");
+    }
+    Map<String, Object> arguments = castArguments(given);
 
     log.info(
         "RpcFetchProvider fetching from {} with RPC call {}",

@@ -161,8 +161,36 @@ public final class OpaClient implements PolicyStoreClient {
     return headers;
   }
 
-  /** R85: the token is cached until ten seconds before it expires. */
+  /**
+   * R85 and R368: the token is cached until ten seconds before it expires, and asked for again
+   * under the store's own connection-retry settings.
+   *
+   * <p>Every call into the engine goes through this when OAuth is the authentication mode, so an
+   * authorisation server that blinked would otherwise fail the write that happened to be next.
+   */
   private void refreshOauthToken() {
+    RuntimeException last = null;
+    for (int attempt = 1; attempt <= retry.attempts(); attempt++) {
+      try {
+        requestOauthToken();
+        return;
+      } catch (RuntimeException e) {
+        last = e;
+        if (attempt == retry.attempts()) {
+          break;
+        }
+        try {
+          Thread.sleep(retry.waitMillis(attempt, java.util.concurrent.ThreadLocalRandom.current()));
+        } catch (InterruptedException interrupted) {
+          Thread.currentThread().interrupt();
+          break;
+        }
+      }
+    }
+    throw last;
+  }
+
+  private void requestOauthToken() {
     log.info("Retrieving a new OAuth access_token.");
     String body = "grant_type=" + URLEncoder.encode("client_credentials", StandardCharsets.UTF_8);
     HttpRequest request =
@@ -174,7 +202,8 @@ public final class OpaClient implements PolicyStoreClient {
             .build();
     try {
       HttpResponse<String> response =
-          http.send(request, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+          io.akka.opal.common.util.Http.send(
+              http, request, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
       JsonNode json = MAPPER.readTree(response.body());
       long expiresIn = json.path("expires_in").asLong();
       log.info("got access_token, expires in {} seconds", expiresIn);
@@ -187,6 +216,30 @@ public final class OpaClient implements PolicyStoreClient {
   }
 
   // -- requests ------------------------------------------------------------
+
+  /**
+   * R290: a read that answers null does so for a connection failure and for nothing else.
+   *
+   * <p>The source's silent-failure wrapper catches its HTTP client's own error type. A store that
+   * answers 200 with something unreadable, or with a status the caller did not accept, is a
+   * different fault and is raised — otherwise a bundle write reads "no modules present", deletes
+   * nothing, and reports success.
+   */
+  private static <T> T failSilently(java.util.function.Supplier<T> read, T fallback) {
+    try {
+      return read.get();
+    } catch (RuntimeException e) {
+      for (Throwable cause = e; cause != null; cause = cause.getCause()) {
+        if (cause instanceof java.io.IOException) {
+          return fallback;
+        }
+        if (cause == cause.getCause()) {
+          break;
+        }
+      }
+      throw e;
+    }
+  }
 
   private HttpResponse<String> send(HttpRequest.Builder builder, List<Integer> accepted) {
     Exception last = null;
@@ -265,27 +318,35 @@ public final class OpaClient implements PolicyStoreClient {
 
   @Override
   public String getPolicy(String policyId) {
-    try {
-      HttpResponse<String> response =
-          send(HttpRequest.newBuilder(URI.create(apiUrl + "/policies/" + policyId)).GET(), null);
-      JsonNode json = MAPPER.readTree(response.body());
-      JsonNode raw = json.path("result").path("raw");
-      return raw.isMissingNode() || raw.isNull() ? null : raw.asText();
-    } catch (Exception e) {
-      return null;
-    }
+    return failSilently(
+        () -> {
+          HttpResponse<String> response =
+              send(HttpRequest.newBuilder(URI.create(apiUrl + "/policies/" + policyId)).GET(), null);
+          try {
+            JsonNode json = MAPPER.readTree(response.body());
+            JsonNode raw = json.path("result").path("raw");
+            return raw.isMissingNode() || raw.isNull() ? null : raw.asText();
+          } catch (Exception e) {
+            throw new IllegalStateException("could not read OPA's answer", e);
+          }
+        },
+        null);
   }
 
   @Override
   public Map<String, String> getPolicies() {
-    try {
-      HttpResponse<String> response =
-          send(HttpRequest.newBuilder(URI.create(apiUrl + "/policies")).GET(), null);
-      return extractModulesFromPoliciesJson(
-          MAPPER.readTree(response.body()), healthCheckPolicyPath);
-    } catch (Exception e) {
-      return null;
-    }
+    return failSilently(
+        () -> {
+          HttpResponse<String> response =
+              send(HttpRequest.newBuilder(URI.create(apiUrl + "/policies")).GET(), null);
+          try {
+            return extractModulesFromPoliciesJson(
+                MAPPER.readTree(response.body()), healthCheckPolicyPath);
+          } catch (Exception e) {
+            throw new IllegalStateException("could not read OPA's answer", e);
+          }
+        },
+        null);
   }
 
   /**
@@ -476,14 +537,18 @@ public final class OpaClient implements PolicyStoreClient {
       wrapper.set("items", data);
       data = wrapper;
     }
-    String body = data == null ? "null" : data.toString();
+    // R289: the document is stripped of its null-valued keys before it is written, at every
+    // depth. A source returning {"a": 1, "b": null} therefore lands in the store as {"a": 1},
+    // and the offline backup taken from the store holds the same thing.
+    JsonNode stripped = data == null ? null : excludeNoneFields(data);
+    String body = stripped == null ? "null" : stripped.toString();
     send(
         HttpRequest.newBuilder(URI.create(apiUrl + "/data" + safePath))
             .header("content-type", "application/json")
             .PUT(HttpRequest.BodyPublishers.ofString(body, StandardCharsets.UTF_8)),
         List.of(204, 304));
     if (dataCache != null) {
-      dataCache.set(safePath, data);
+      dataCache.set(safePath, stripped);
     }
   }
 
@@ -557,22 +622,27 @@ public final class OpaClient implements PolicyStoreClient {
   @Override
   public JsonNode getData(String path) {
     String safePath = path == null || path.isEmpty() || path.startsWith("/") ? path : "/" + path;
-    try {
-      HttpResponse<String> response =
-          send(
-              HttpRequest.newBuilder(URI.create(apiUrl + "/data" + (safePath == null ? "" : safePath)))
-                  .GET(),
-              null);
-      JsonNode json = MAPPER.readTree(response.body());
-      JsonNode result = json.get("result");
-      return result == null ? MAPPER.createObjectNode() : result;
-    } catch (Exception e) {
-      return null;
-    }
+    return failSilently(
+        () -> {
+          HttpResponse<String> response =
+              send(
+                  HttpRequest.newBuilder(
+                          URI.create(apiUrl + "/data" + (safePath == null ? "" : safePath)))
+                      .GET(),
+                  null);
+          try {
+            JsonNode json = MAPPER.readTree(response.body());
+            JsonNode result = json.get("result");
+            return result == null ? MAPPER.createObjectNode() : result;
+          } catch (Exception e) {
+            throw new IllegalStateException("could not read OPA's answer", e);
+          }
+        },
+        null);
   }
 
   @Override
-  public JsonNode getDataWithInput(String path, JsonNode input) {
+  public Proxied getDataWithInput(String path, JsonNode input) {
     String stripped = path.startsWith("/") ? path.substring(1) : path;
     ObjectNode body = MAPPER.createObjectNode();
     body.set("input", input);
@@ -582,11 +652,9 @@ public final class OpaClient implements PolicyStoreClient {
                 .header("content-type", "application/json")
                 .POST(HttpRequest.BodyPublishers.ofString(body.toString(), StandardCharsets.UTF_8)),
             null);
-    try {
-      return MAPPER.readTree(response.body());
-    } catch (Exception e) {
-      return MAPPER.createObjectNode();
-    }
+    java.util.Map<String, String> headers = new LinkedHashMap<>();
+    response.headers().map().forEach((name, values) -> headers.put(name, String.join(", ", values)));
+    return new Proxied(response.statusCode(), headers, response.body());
   }
 
   // -- transaction log -----------------------------------------------------
@@ -597,19 +665,49 @@ public final class OpaClient implements PolicyStoreClient {
     transactionWriter.persist(state);
   }
 
-  /** R90: a failure to write the log into the engine is logged and otherwise ignored. */
+  /**
+   * R90 and R369: a failure to write the log into the engine is retried, then logged and
+   * otherwise ignored.
+   *
+   * <p>The retry is around the whole call, so the state the log carries is re-processed on each
+   * attempt — which is what the source does, and the state's own transitions are idempotent for
+   * that reason.
+   */
   @Override
   public void logTransaction(Store.StoreTransaction transaction) {
+    for (int attempt = 1; attempt <= retry.attempts(); attempt++) {
+      try {
+        writeTransactionLog(transaction);
+        return;
+      } catch (RuntimeException e) {
+        if (attempt == retry.attempts()) {
+          throw e;
+        }
+        try {
+          Thread.sleep(retry.waitMillis(attempt, java.util.concurrent.ThreadLocalRandom.current()));
+        } catch (InterruptedException interrupted) {
+          Thread.currentThread().interrupt();
+          return;
+        }
+      }
+    }
+  }
+
+  private void writeTransactionLog(Store.StoreTransaction transaction) {
     state.processTransaction(transaction);
     TransactionLogPolicyWriter writer = transactionWriter;
     if (writer != null) {
       try {
         writer.persist(state);
       } catch (Exception e) {
+        // The write is not inside a protected transaction context, so a failure is recorded and
+        // nothing is undone. The whole transaction is logged with it: without the data, the id
+        // names a record that was never written anywhere.
         log.error(
-            "Cannot write to OPAL transaction log, transaction id={}, error={}",
+            "Cannot write to OPAL transaction log, transaction id={}, error={} with data={}",
             transaction.id(),
-            e.toString());
+            e.toString(),
+            io.akka.opal.common.util.PythonJson.dumps(transaction));
       }
     }
   }

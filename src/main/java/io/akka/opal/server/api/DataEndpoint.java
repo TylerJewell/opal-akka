@@ -42,54 +42,62 @@ public class DataEndpoint extends AbstractHttpEndpoint {
   @Get("/policy-data")
   public HttpResponse defaultAllData() {
     return Responses.guarded(requestContext(), () -> {
-      if (!Role.isServer()) {
+      if (!Role.isServer() || !mountedAtItsDefault("ALL_DATA_ROUTE", "/policy-data")) {
         return Responses.notFound();
       }
-      log.info("Serving default all-data, DATA_CONFIG_SOURCES was not configured");
-      return Responses.ok(Map.of());
+      return allData();
     });
+  }
+
+  private HttpResponse allData() {
+    log.info("Serving default all-data, DATA_CONFIG_SOURCES was not configured");
+    return Responses.ok(Map.of());
   }
 
   /** R56: the configured sources, or a redirect to whoever serves them per client. */
   @Get("/data/config")
   public HttpResponse getDataSourcesConfig() {
     return Responses.guarded(requestContext(), () -> {
-      if (!Role.isServer()) {
+      if (!Role.isServer() || !mountedAtItsDefault("DATA_CONFIG_ROUTE", "/data/config")) {
         return Responses.notFound();
       }
-      try {
-        Authn.requireLoggedIn(runtime.signer(), requestContext());
-      } catch (Unauthorized e) {
-        return Responses.unauthorized(e);
-      }
-      Data.ServerDataSourceConfig config = runtime.config().get("DATA_CONFIG_SOURCES");
-      if (config == null) {
-        return Responses.detail(
-            StatusCodes.INTERNAL_SERVER_ERROR, "no data sources configuration was configured");
-      }
-      // R43: an inline configuration answers, and the redirect is only for a deployment that
-      // has none. A configuration carrying both is refused by its own validator, so the order
-      // matters only for one built in code rather than read from the environment — and there
-      // the source serves the inline one.
-      if (config.config() != null) {
-        log.info("Serving source configuration");
-        return Responses.ok(config.config());
-      }
-      if (config.external_source_url() != null) {
-        String token = Authn.bearerToken(requestContext());
-        String url = withQueryParam(config.external_source_url(), "token", token);
-        log.info(
-            "Source configuration is available at '{}', redirecting with token={} (abbrv.)",
-            config.external_source_url(),
-            abbreviate(token));
-        return Responses.redirect(url);
-      }
-      log.error(
-          "data source configuration is invalid: neither an inline config "
-              + "nor an external_source_url was provided");
-      return Responses.detail(
-          StatusCodes.INTERNAL_SERVER_ERROR, "no data sources configuration was configured");
+      return dataSourcesConfig();
     });
+  }
+
+  private HttpResponse dataSourcesConfig() {
+    try {
+      Authn.requireLoggedIn(runtime.signer(), requestContext());
+    } catch (Unauthorized e) {
+      return Responses.unauthorized(e);
+    }
+    Data.ServerDataSourceConfig config = runtime.config().get("DATA_CONFIG_SOURCES");
+    if (config == null) {
+      return Responses.detail(
+          StatusCodes.INTERNAL_SERVER_ERROR, "Did not find a data source configuration!");
+    }
+    // R43: an inline configuration answers, and the redirect is only for a deployment that
+    // has none. A configuration carrying both is refused by its own validator, so the order
+    // matters only for one built in code rather than read from the environment — and there
+    // the source serves the inline one.
+    if (config.config() != null) {
+      log.info("Serving source configuration");
+      return Responses.ok(config.config());
+    }
+    if (config.external_source_url() != null) {
+      String token = Authn.bearerToken(requestContext());
+      String url = withQueryParam(config.external_source_url(), "token", token);
+      log.info(
+          "Source configuration is available at '{}', redirecting with token={} (abbrv.)",
+          config.external_source_url(),
+          abbreviate(token));
+      return Responses.redirect(url);
+    }
+    log.error(
+        "data source configuration is invalid: neither an inline config "
+            + "nor an external_source_url was provided");
+    return Responses.detail(
+        StatusCodes.INTERNAL_SERVER_ERROR, "Did not find a data source configuration!");
   }
 
   /**
@@ -108,54 +116,63 @@ public class DataEndpoint extends AbstractHttpEndpoint {
   @Post("/data/config")
   public HttpResponse publishDataUpdateEvent(Data.DataUpdate update) {
     return Responses.guarded(requestContext(), () -> {
-      if (!Role.isServer()) {
+      if (!Role.isServer() || !mountedAtItsDefault("DATA_CONFIG_ROUTE", "/data/config")) {
         return Responses.notFound();
       }
-      // R199: a server with no publisher has nothing to publish through, and says so the way
-      // the source does — by failing where it reaches for one.
-      runtime.requirePublisher();
-      if (update == null || update.entries() == null) {
-        Map<String, Object> error = new LinkedHashMap<>();
-        error.put("loc", java.util.List.of("body", "entries"));
-        error.put("msg", "field required");
-        error.put("type", "value_error.missing");
-        return Responses.detail(
-            StatusCodes.UNPROCESSABLE_CONTENT, java.util.Map.of("detail", java.util.List.of(error)));
-      }
-      try {
-        Map<String, Object> claims = Authn.requireLoggedIn(runtime.signer(), requestContext());
-        Authz.requirePeerType(runtime.signer().enabled(), claims, PeerType.datasource);
-        Authz.restrictOptionalTopicsToPublish(runtime.signer().enabled(), claims, update);
-      } catch (Unauthorized e) {
-        log.error("Unauthorized to publish update: {}", e.getMessage());
-        return Responses.unauthorized(e);
-      }
-      runtime.publishDataUpdate(update, null);
-      return Responses.statusOk();
+      return publishUpdate(update);
     });
+  }
+
+  private HttpResponse publishUpdate(Data.DataUpdate update) {
+    // R199: a server with no publisher has nothing to publish through, and says so the way
+    // the source does — by failing where it reaches for one.
+    runtime.requirePublisher();
+    if (update == null || update.entries() == null) {
+      Map<String, Object> error = new LinkedHashMap<>();
+      error.put("loc", java.util.List.of("body", "entries"));
+      error.put("msg", "field required");
+      error.put("type", "value_error.missing");
+      return Responses.detail(
+          StatusCodes.UNPROCESSABLE_CONTENT, java.util.Map.of("detail", java.util.List.of(error)));
+    }
+    try {
+      Map<String, Object> claims = Authn.requireLoggedIn(runtime.signer(), requestContext());
+      Authz.requirePeerType(runtime.signer().enabled(), claims, PeerType.datasource);
+      Authz.restrictOptionalTopicsToPublish(runtime.signer().enabled(), claims, update);
+    } catch (Unauthorized e) {
+      log.error("Unauthorized to publish update: {}", e.getMessage());
+      return Responses.unauthorized(e);
+    }
+    runtime.publishDataUpdate(update, null);
+    return Responses.statusOk();
   }
 
   /** R132: a client's completion report, logged with the payload-bearing fields removed. */
   @Post("/data/callback_report")
   public HttpResponse logClientUpdateReport(Data.DataUpdateReport report) {
     return Responses.guarded(requestContext(), () -> {
-      if (!Role.isServer()) {
+      if (!Role.isServer()
+          || !mountedAtItsDefault("DATA_CALLBACK_DEFAULT_ROUTE", "/data/callback_report")) {
         return Responses.notFound();
       }
-      if (report == null || report.reports() == null) {
-        Map<String, Object> error = new LinkedHashMap<>();
-        error.put("loc", java.util.List.of("body", "reports"));
-        error.put("msg", "field required");
-        error.put("type", "value_error.missing");
-        return Responses.detail(
-            StatusCodes.UNPROCESSABLE_CONTENT, java.util.Map.of("detail", java.util.List.of(error)));
-      }
-      log.info(
-          "Received update report for update {} with {} entries",
-          report.update_id(),
-          report.reports().size());
-      return Responses.ok(Map.of());
+      return logUpdateReport(report);
     });
+  }
+
+  private HttpResponse logUpdateReport(Data.DataUpdateReport report) {
+    if (report == null || report.reports() == null) {
+      Map<String, Object> error = new LinkedHashMap<>();
+      error.put("loc", java.util.List.of("body", "reports"));
+      error.put("msg", "field required");
+      error.put("type", "value_error.missing");
+      return Responses.detail(
+          StatusCodes.UNPROCESSABLE_CONTENT, java.util.Map.of("detail", java.util.List.of(error)));
+    }
+    log.info(
+        "Received update report for update {} with {} entries",
+        report.update_id(),
+        report.reports().size());
+    return Responses.ok(Map.of());
   }
 
   static String withQueryParam(String url, String name, String value) {
@@ -197,10 +214,16 @@ public class DataEndpoint extends AbstractHttpEndpoint {
       return Responses.notFound();
     }
     if (matchesConfigured(path, "ALL_DATA_ROUTE", "/policy-data")) {
-      return defaultAllData();
+      return allData();
     }
     if (matchesConfigured(path, "DATA_CONFIG_ROUTE", "/data/config")) {
-      return getDataSourcesConfig();
+      return dataSourcesConfig();
+    }
+    // R327: the JWKS document is mounted where its own entry says, and this is the one dispatch
+    // in the service that answers a path the annotations do not name — the runtime refuses a
+    // second wildcard at the same depth, so every moved route is answered from here.
+    if (Jwks.mountedAt(runtime).equals(path)) {
+      return Responses.ok(Jwks.read(runtime));
     }
     return Responses.notFound();
   }
@@ -237,10 +260,10 @@ public class DataEndpoint extends AbstractHttpEndpoint {
       return Responses.notFound();
     }
     if (matchesConfigured(path, "DATA_CONFIG_ROUTE", "/data/config")) {
-      return publishDataUpdateEvent(read(body, Data.DataUpdate.class));
+      return publishUpdate(read(body, Data.DataUpdate.class));
     }
     if (matchesConfigured(path, "DATA_CALLBACK_DEFAULT_ROUTE", "/data/callback_report")) {
-      return logClientUpdateReport(read(body, Data.DataUpdateReport.class));
+      return logUpdateReport(read(body, Data.DataUpdateReport.class));
     }
     return Responses.notFound();
   }
@@ -255,6 +278,18 @@ public class DataEndpoint extends AbstractHttpEndpoint {
    * <p>The default is excluded because the annotation above already answers it; matching it here
    * as well would mean two routes claiming one path.
    */
+  /**
+   * Whether the route's own path is still the one its entry names.
+   *
+   * <p>The source mounts each of these at a path read from configuration, so moving the entry
+   * moves the route rather than adding a second one. The annotation here cannot move, so the
+   * compiled path answers only while the entry still points at it.
+   */
+  private boolean mountedAtItsDefault(String entry, String compiledDefault) {
+    String configured = runtime.config().getString(entry);
+    return configured == null || configured.equals(compiledDefault);
+  }
+
   private boolean matchesConfigured(String path, String entry, String compiledDefault) {
     String configured = runtime.config().getString(entry);
     return configured != null && !configured.equals(compiledDefault) && configured.equals(path);

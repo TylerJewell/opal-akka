@@ -22,6 +22,12 @@ import java.util.Map;
  */
 public final class ServerConfig extends Confi {
 
+  @Override
+  protected String configName() {
+    return "OpalServerConfig";
+  }
+
+
   public ServerConfig(Map<String, String> environment) {
     super("OPAL_", environment);
     declare();
@@ -29,7 +35,7 @@ public final class ServerConfig extends Confi {
   }
 
   public ServerConfig() {
-    this(System.getenv());
+    this(io.akka.opal.common.confi.ConfigFiles.overlay(System.getenv()));
   }
 
   private void declare() {
@@ -50,7 +56,7 @@ public final class ServerConfig extends Confi {
     enumeration("AUTH_PRIVATE_KEY_FORMAT", EncryptionKeyFormat.class, EncryptionKeyFormat.pem, "The format of the private key for authentication");
     str("AUTH_PRIVATE_KEY_PASSPHRASE", null, "The passphrase for the private key");
     key("AUTH_PRIVATE_KEY", "The private key for authentication",
-            () -> get("AUTH_PRIVATE_KEY_FORMAT"));
+            () -> get("AUTH_PRIVATE_KEY_FORMAT"), false);
     str("AUTH_JWKS_URL", "/.well-known/jwks.json", "The URL for the JSON Web Key Set (JWKS)");
     str("AUTH_JWKS_STATIC_DIR",
             System.getProperty("user.dir") + "/jwks_dir", "The directory for static JWKS files");

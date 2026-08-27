@@ -41,13 +41,135 @@ public final class StoreTransactionContext implements AutoCloseable {
     return transactionId;
   }
 
+  /**
+   * R372: the store, wrapped so that every write made through it records itself.
+   *
+   * <p>The transaction's action list is what the log says was attempted, and a list assembled by
+   * hand beside the calls is a list that goes stale the moment a call is added. Here the six
+   * methods that carry a transaction id record their own names, so the list is derived from what
+   * ran rather than from what somebody remembered to write down.
+   */
   public PolicyStoreClient store() {
+    return new Recording();
+  }
+
+  /** The store underneath, for a caller that is not writing inside this transaction. */
+  public PolicyStoreClient rawStore() {
     return store;
   }
 
   /** Records that a method ran as part of this transaction. */
   public void action(String name) {
     actions.add(name);
+  }
+
+  /** What the transaction recorded, in the order it happened. */
+  public List<String> actions() {
+    return List.copyOf(actions);
+  }
+
+  /** Every method that takes a transaction id records its own name and passes that id on. */
+  private final class Recording implements PolicyStoreClient {
+
+    @Override
+    public void setPolicy(String policyId, String policyCode, String transactionId) {
+      action("set_policy");
+      store.setPolicy(policyId, policyCode, transactionId());
+    }
+
+    @Override
+    public void deletePolicy(String policyId, String transactionId) {
+      action("delete_policy");
+      store.deletePolicy(policyId, transactionId());
+    }
+
+    @Override
+    public void setPolicies(io.akka.opal.common.schemas.Policy.PolicyBundle bundle,
+        String transactionId) {
+      action("set_policies");
+      store.setPolicies(bundle, transactionId());
+    }
+
+    @Override
+    public void setPolicyData(com.fasterxml.jackson.databind.JsonNode policyData, String path,
+        String transactionId) {
+      action("set_policy_data");
+      store.setPolicyData(policyData, path, transactionId());
+    }
+
+    @Override
+    public void patchPolicyData(List<Store.JSONPatchAction> actions, String path,
+        String transactionId) {
+      action("patch_policy_data");
+      store.patchPolicyData(actions, path, transactionId());
+    }
+
+    @Override
+    public void deletePolicyData(String path, String transactionId) {
+      action("delete_policy_data");
+      store.deletePolicyData(path, transactionId());
+    }
+
+    @Override
+    public String getPolicyVersion() {
+      return store.getPolicyVersion();
+    }
+
+    @Override
+    public String getPolicy(String policyId) {
+      return store.getPolicy(policyId);
+    }
+
+    @Override
+    public java.util.Map<String, String> getPolicies() {
+      return store.getPolicies();
+    }
+
+    @Override
+    public List<String> getPolicyModuleIds() {
+      return store.getPolicyModuleIds();
+    }
+
+    @Override
+    public com.fasterxml.jackson.databind.JsonNode getData(String path) {
+      return store.getData(path);
+    }
+
+    @Override
+    public Proxied getDataWithInput(String path,
+        com.fasterxml.jackson.databind.JsonNode input) {
+      return store.getDataWithInput(path, input);
+    }
+
+    @Override
+    public void initHealthcheckPolicy(String policyId, String policyCode) {
+      store.initHealthcheckPolicy(policyId, policyCode);
+    }
+
+    @Override
+    public void logTransaction(Store.StoreTransaction transaction) {
+      store.logTransaction(transaction);
+    }
+
+    @Override
+    public boolean isReady() {
+      return store.isReady();
+    }
+
+    @Override
+    public boolean isHealthy() {
+      return store.isHealthy();
+    }
+
+    @Override
+    public String fullExport() {
+      return store.fullExport();
+    }
+
+    @Override
+    public void fullImport(String content) {
+      store.fullImport(content);
+    }
   }
 
   public void updateRemoteStatus(String url, boolean succeed, String error) {

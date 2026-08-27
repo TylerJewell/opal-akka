@@ -31,12 +31,28 @@ public final class PolicyUpdates {
       List<String> fileExtensions,
       List<String> bundleIgnore)
       throws IOException {
+    return createPolicyUpdate(
+        repository, oldCommit, newCommit, path -> tracked(path, fileExtensions, bundleIgnore));
+  }
+
+  /**
+   * The same, with the caller supplying what counts as a policy file.
+   *
+   * <p>A scope replaces the extension-and-ignore pair entirely rather than adding to it, which
+   * is why this takes the whole test and not another list.
+   */
+  public static Policy.PolicyUpdateMessageNotification createPolicyUpdate(
+      Repository repository,
+      ObjectId oldCommit,
+      ObjectId newCommit,
+      java.util.function.Predicate<String> isPolicyFile)
+      throws IOException {
 
     CommitViewer newViewer = new CommitViewer(repository, newCommit);
     if (oldCommit.equals(newCommit)) {
       List<String> paths = new ArrayList<>();
       for (CommitViewer.Node file : newViewer.files()) {
-        if (tracked(file.path(), fileExtensions, bundleIgnore)) {
+        if (isPolicyFile.test(file.path())) {
           paths.add(file.path());
         }
       }
@@ -46,7 +62,7 @@ public final class PolicyUpdates {
     try (DiffViewer viewer = new DiffViewer(repository, oldCommit, newCommit)) {
       List<String> paths = new ArrayList<>();
       for (String path : viewer.affectedPaths()) {
-        if (tracked(path, fileExtensions, bundleIgnore)) {
+        if (isPolicyFile.test(path)) {
           paths.add(path);
         }
       }
@@ -74,14 +90,37 @@ public final class PolicyUpdates {
     return new Policy.PolicyUpdateMessageNotification(message, topics);
   }
 
-  /** An empty extension list is no filter at all, which is not the same as an empty match. */
-  private static boolean tracked(String path, List<String> fileExtensions, List<String> ignore) {
-    if (fileExtensions == null || fileExtensions.isEmpty()) {
-      return true;
+  /**
+   * Whether a changed file is one the fleet is told about.
+   *
+   * <p>No extension list at all is no filter. An <em>empty</em> list is a filter that matches
+   * nothing, which is not the same thing: the source's own test is membership of the list, and
+   * nothing is a member of an empty one.
+   */
+  static boolean tracked(String path, List<String> fileExtensions, List<String> ignore) {
+    if (fileExtensions == null) {
+      return Glob.globStyleMatchPathToList(path, ignore) == null;
     }
     if (!fileExtensions.contains(PurePath.suffix(path))) {
       return false;
     }
     return Glob.globStyleMatchPathToList(path, ignore) == null;
+  }
+
+  /**
+   * R278: what a <em>scope</em> counts as a policy file.
+   *
+   * <p>A scope announces changes through a filter of its own rather than through the extension
+   * and ignore pair above: a {@code .json} counts only when it is named {@code data.json}, and
+   * the scope's {@code bundle_ignore} is not consulted at all — a directory the bundle route
+   * would leave out is still a directory whose change the fleet hears about.
+   */
+  public static boolean isRegoSourceFile(String path, List<String> extensions) {
+    List<String> effective = extensions == null ? List.of(".rego", ".json") : extensions;
+    String suffix = PurePath.suffix(path);
+    if (effective.contains(".json") && ".json".equals(suffix)) {
+      return "data.json".equals(PurePath.name(path));
+    }
+    return effective.contains(suffix);
   }
 }

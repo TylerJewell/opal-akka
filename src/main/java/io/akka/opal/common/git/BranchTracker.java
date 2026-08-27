@@ -5,6 +5,7 @@ import org.eclipse.jgit.api.Git;
 import org.eclipse.jgit.api.PullCommand;
 import org.eclipse.jgit.lib.ObjectId;
 import org.eclipse.jgit.lib.Ref;
+import org.eclipse.jgit.lib.Repository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -49,14 +50,18 @@ public final class BranchTracker {
     return previousCommit;
   }
 
+  /**
+   * The head of the tracked branch.
+   *
+   * <p>Read from {@code refs/heads} by its full name rather than by a search: the source reads
+   * the repository's local heads, so a branch that exists only as a remote-tracking ref or as a
+   * tag is not this branch and the answer is the same failure as for one that is absent.
+   */
   public ObjectId latestCommit() {
     try {
-      Ref ref = git.getRepository().findRef(branchName);
+      Ref ref = git.getRepository().findRef("refs/heads/" + branchName);
       if (ref == null) {
-        List<String> branches =
-            git.branchList().call().stream().map(Ref::getName).toList();
-        log.error(
-            "did not find main branch: {}, instead found: {}", branchName, branches);
+        log.error("did not find main branch: {}, instead found: {}", branchName, heads());
         throw new RepoCloner.GitFailed("no such branch: " + branchName);
       }
       return ref.getObjectId();
@@ -64,6 +69,33 @@ public final class BranchTracker {
       throw e;
     } catch (Exception e) {
       throw new RepoCloner.GitFailed("could not read branch " + branchName, e);
+    }
+  }
+
+  /** The heads as the source lists them in its own failure line: a name and a path each. */
+  private List<String> heads() {
+    try {
+      return git.branchList().call().stream()
+          .map(ref -> "{'name': '" + Repository.shortenRefName(ref.getName())
+              + "', 'path': '" + ref.getName() + "'}")
+          .toList();
+    } catch (Exception e) {
+      return List.of();
+    }
+  }
+
+  /**
+   * R276: the remote is resolved before it is used, and its absence names the remotes there are.
+   *
+   * <p>Handing an unknown remote name to the library gives back its own message, which does not
+   * say what the repository actually has — and that list is the whole value of the line.
+   */
+  private void requireRemote() {
+    java.util.Set<String> remotes = git.getRepository().getRemoteNames();
+    if (!remotes.contains(remoteName)) {
+      log.error("did not find main branch: no such remote {}, instead found: {}",
+          remoteName, remotes.stream().sorted().toList());
+      throw new RepoCloner.GitFailed("no such remote: " + remoteName);
     }
   }
 
@@ -75,19 +107,16 @@ public final class BranchTracker {
         return;
       } catch (Exception e) {
         last = e;
-        sleep();
+        if (attempt < ATTEMPTS - 1) {
+          sleep();
+        }
       }
     }
-    try {
-      List<String> branches = git.branchList().call().stream().map(Ref::getName).toList();
-      log.error(
-          "did not find main branch: {}, instead found: {}, got error: {}",
-          branchName,
-          branches,
-          last == null ? "" : last.toString());
-    } catch (Exception ignored) {
-      // The branch listing is for the log line only; the failure below is the real answer.
-    }
+    log.error(
+        "did not find main branch: {}, instead found: {}, got error: {}",
+        branchName,
+        heads(),
+        last == null ? "" : last.toString());
     throw new RepoCloner.GitFailed("could not check out " + branchName, last);
   }
 
@@ -104,6 +133,7 @@ public final class BranchTracker {
   }
 
   private void doPull() {
+    requireRemote();
     Exception last = null;
     for (int attempt = 0; attempt < ATTEMPTS; attempt++) {
       try {
@@ -115,7 +145,9 @@ public final class BranchTracker {
         return;
       } catch (Exception e) {
         last = e;
-        sleep();
+        if (attempt < ATTEMPTS - 1) {
+          sleep();
+        }
       }
     }
     throw new RepoCloner.GitFailed("could not pull from " + remoteName, last);

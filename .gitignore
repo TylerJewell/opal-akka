@@ -5,3 +5,7 @@ target/
 
 # Written by a run: the JWKS a server publishes when it is told to keep one on disk.
 jwks_dir/
+
+# Written by a run: the default policy-repository clone directory, which is beside
+# the project because that is where the source's own default puts it.
+regoclone/

@@ -70,6 +70,7 @@ public final class Broadcasters {
     private Resilience resilience = Resilience.off();
     private Runnable onReconnect;
     private Runnable onGiveUp;
+    private Runnable onReaderEnded;
 
     private Thread readerThread;
     volatile Reader reader;
@@ -113,8 +114,20 @@ public final class Broadcasters {
     }
 
     @Override
+    public void setOnReaderEnded(Runnable callback) {
+      this.onReaderEnded = callback;
+    }
+
+    @Override
     public boolean isReaderHealthy() {
-      return !gaveUp && readerThread != null && readerThread.isAlive();
+      // R323: nothing listening is idleness, not a fault. The source answers healthy while its
+      // listener count is zero, because a reader that is not there is only a problem for
+      // somebody waiting on it — and a worker reported unhealthy for being idle is taken out of
+      // a load balancer for doing nothing wrong.
+      if (readerThread == null) {
+        return true;
+      }
+      return !gaveUp && readerThread.isAlive();
     }
 
     @Override
@@ -151,7 +164,16 @@ public final class Broadcasters {
       // thread, so a publication made immediately after start must already know where to go.
       this.reader = reader;
       running.set(true);
-      readerThread = new Thread(() -> loop(reader), "opal-broadcast-" + getClass().getSimpleName());
+      readerThread =
+          new Thread(
+              () -> {
+                try {
+                  loop(reader);
+                } finally {
+                  fireReaderEnded();
+                }
+              },
+              "opal-broadcast-" + getClass().getSimpleName());
       readerThread.setDaemon(true);
       readerThread.start();
     }
@@ -365,6 +387,19 @@ public final class Broadcasters {
       log.info("Replaying {} buffered broadcast(s) after recovery", pending.size());
       List<BroadcastNotification> unsent = new ArrayList<>(pending);
       while (!unsent.isEmpty()) {
+        // R324: an entry that will not serialise is dropped rather than retried. It is not a
+        // transport failure and no later flush will make it work, so leaving it at the head
+        // wedges the buffer: every recovery after it replays nothing at all.
+        try {
+          write(unsent.get(0));
+        } catch (RuntimeException e) {
+          log.error(
+              "Dropping un-serializable buffered broadcast on topic '{}': {}",
+              unsent.get(0).topics(),
+              e.toString());
+          unsent.remove(0);
+          continue;
+        }
         try {
           send(unsent.get(0));
           unsent.remove(0);
@@ -399,6 +434,25 @@ public final class Broadcasters {
         onReconnect.run();
       } catch (RuntimeException e) {
         log.error("Broadcaster on_reconnect callback failed", e);
+      }
+    }
+
+    /**
+     * R337: the reader loop has ended and this worker is no longer reading the backbone.
+     *
+     * <p>Distinct from the give-up hook: giving up is one way to get here, and a reconnect the
+     * configuration forbids is another, and both leave a worker whose fleet statistics can no
+     * longer be relied on. Not fired while the process is closing down, where the loop ending is
+     * what was asked for.
+     */
+    private void fireReaderEnded() {
+      if (!running.get() || onReaderEnded == null) {
+        return;
+      }
+      try {
+        onReaderEnded.run();
+      } catch (RuntimeException e) {
+        log.error("Broadcaster on_reader_ended callback failed", e);
       }
     }
 

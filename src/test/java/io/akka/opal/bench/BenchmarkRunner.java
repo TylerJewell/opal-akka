@@ -132,6 +132,7 @@ public final class BenchmarkRunner {
     out.put("configuration-census", BenchmarkRunner::configurationCensus);
     out.put("second-batch", BenchmarkRunner::secondBatch);
     out.put("third-batch", () -> ThirdBatch.run(workloads, ANSWERS));
+    out.put("fourth-batch", () -> FourthBatch.run(workloads, ANSWERS));
     return out;
   }
 

@@ -50,7 +50,7 @@ public class DocsEndpoint extends AbstractHttpEndpoint {
   @Get("/docs")
   public HttpResponse swaggerUiHtml() {
     return Responses.guarded(requestContext(), () -> {
-      return Responses.html(vendored("swagger-ui.html"));
+      return Responses.html(underRootPath(vendored("swagger-ui.html")));
     });
   }
 
@@ -64,8 +64,35 @@ public class DocsEndpoint extends AbstractHttpEndpoint {
   @Get("/redoc")
   public HttpResponse redocHtml() {
     return Responses.guarded(requestContext(), () -> {
-      return Responses.html(vendored("redoc.html"));
+      return Responses.html(underRootPath(vendored("redoc.html")));
     });
+  }
+
+  /**
+   * R338: the document's address is written relative to the prefix this process is served under.
+   *
+   * <p>Behind a reverse proxy mounting the process at {@code /opal}, a page fetching
+   * {@code /openapi.json} asks for a path the proxy does not map. The source reads the prefix
+   * from its web server, which is given it on the command line; there is no such argument here,
+   * so the prefix comes from the header a proxy sends to say what it stripped. With no proxy in
+   * front there is no header, the prefix is empty, and the page is byte for byte what the source
+   * serves.
+   */
+  private String underRootPath(String markup) {
+    String prefix = rootPath();
+    return prefix.isEmpty() ? markup : markup.replace("/openapi.json", prefix + "/openapi.json");
+  }
+
+  private String rootPath() {
+    String prefix =
+        requestContext()
+            .requestHeader("x-forwarded-prefix")
+            .map(header -> header.value())
+            .orElse("");
+    while (prefix.endsWith("/")) {
+      prefix = prefix.substring(0, prefix.length() - 1);
+    }
+    return prefix;
   }
 
   /** The shell as the source serves it, with only the title's process name filled in. */
