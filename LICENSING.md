@@ -6,21 +6,23 @@ This repository holds two kinds of code and they are not under the same licence.
 
 Everything outside the vendored trees listed below was written for this project. It is a
 clean-room implementation: written against a specification derived by running
-[permitio/opal](https://github.com/permitio/opal) and recording what it does, not by translating
-its source. See `../opal-port/specs/SPEC-002-opal-complete.md` for the rules it was built to, and `ACKNOWLEDGEMENTS.md` for the
+[permitio/opal](https://github.com/permitio/opal) and recording what it does, not by translating its
+source. See `../opal-port/specs/SPEC-002-opal-complete.md` for the rules it was built to, and `ACKNOWLEDGEMENTS.md` for the
 places any text was carried across and why.
 
-It is licensed under the Apache License 2.0. See `LICENSE`.
+It is licensed under the Apache License 2.0, Copyright 2026 Tyler Jewell. See `LICENSE`
+and `NOTICE`.
 
 ## The interface — Apache-2.0, as permitio/opal licensed it
 
+- `src/main/resources/engine/healthcheck/opal.rego`
 - `src/main/resources/gui/`
 - `src/main/resources/openapi/`
 
-That code was written by the permitio/opal project and is shipped here **verbatim**, reused
-rather than rebuilt, per this harness's RENDERING.md R3. It remains under the licence its
-authors chose, unmodified, in `LICENSE-opal` and beside the code itself. Nothing
-about this repository relicenses it.
+That code was written by the permitio/opal project, Copyright 2021 Or Weis and Asaf Cohen, and is shipped
+here **verbatim**, reused rather than rebuilt, per this harness's RENDERING.md R3. It
+remains under the licence its authors chose, unmodified, in `LICENSE-opal` and beside
+the code itself. Nothing about this repository relicenses it.
 
 ## Why the split
 

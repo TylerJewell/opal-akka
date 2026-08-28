@@ -1,0 +1,21 @@
+opal-akka
+Copyright 2026 Tyler Jewell
+
+This software was written for the Akka Specify port experiment and is licensed
+under the Apache License, Version 2.0. See LICENSE.
+
+It is a clean-room implementation: written against a specification derived by
+running permitio/opal and recording what it does, not by translating its source.
+
+Portions of this repository are NOT covered by that licence. The following trees
+are reused verbatim from permitio/opal (https://github.com/permitio/opal):
+
+    src/main/resources/engine/healthcheck/opal.rego
+    src/main/resources/gui/
+    src/main/resources/openapi/
+
+    Copyright 2021 Or Weis and Asaf Cohen
+    Licensed under Apache-2.0
+
+Those files remain under the licence their authors chose. Nothing in this
+repository relicenses them. See LICENSING.md and .vendored.

@@ -188,9 +188,6 @@
 
    Copyright 2026 Tyler Jewell
 
-   Derived in behaviour from permitio/opal, Copyright 2021 Or Weis and Asaf Cohen,
-   which is licensed under this same licence. See ACKNOWLEDGEMENTS.md.
-
    Licensed under the Apache License, Version 2.0 (the "License");
    you may not use this file except in compliance with the License.
    You may obtain a copy of the License at
